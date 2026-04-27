@@ -154,6 +154,73 @@ def test_lowrank_two_sided_rectangular_makes_progress_without_refresh():
     assert loss.item() < initial_loss * 0.6
 
 
+def test_lowrank_state_strictly_smaller_than_dense():
+    """1.6 verify (proxy on macOS): per-layer optimizer state element count
+    for two-sided rank-r is r²/(out·in) of the dense state. Reports the
+    reduction ratio for the run's log."""
+    out_dim, in_dim, rank = 768, 768, 64
+    w = torch.nn.Parameter(torch.randn(out_dim, in_dim))
+    w.grad = torch.randn(out_dim, in_dim)
+
+    o = LowRankAdamW([w], lr=1e-3)
+    proj = make_projector_from_grad(w.grad, mode="two_sided", rank=rank)
+    o.attach_projector(w, proj)
+    o.step()
+
+    state = o.state[w]
+    lr_elems = state["exp_avg"].numel() + state["exp_avg_sq"].numel()
+    dense_elems = 2 * out_dim * in_dim
+    ratio = dense_elems / lr_elems
+
+    # two_sided rank=64 on 768x768: dense=1,179,648  vs  low-rank=8,192  -> 144x.
+    assert lr_elems == 2 * rank * rank
+    assert ratio > 100, f"expected >100x state reduction, got {ratio:.1f}x"
+    print(f"[stage1.6] dense state {dense_elems} elem  vs  low-rank {lr_elems} elem  ({ratio:.1f}x)")
+
+
+def test_dummy_mlp_lowrank_makes_progress():
+    """1.6 end-to-end: a tiny MLP trains with LowRankAdamW (full-rank two-sided)
+    on a synthetic regression and reduces loss substantially. Catches integration
+    breakage between projector + optimizer + nn.Module."""
+    torch.manual_seed(0)
+    h = 16
+
+    class TinyMLP(torch.nn.Module):
+        def __init__(self):
+            super().__init__()
+            self.l1 = torch.nn.Linear(h, h * 4, bias=False)
+            self.l2 = torch.nn.Linear(h * 4, h, bias=False)
+
+        def forward(self, x):
+            return self.l2(torch.nn.functional.relu(self.l1(x)))
+
+    g = torch.Generator().manual_seed(0)
+    X = torch.randn(64, h, generator=g)
+    # Learnable target: a fixed (random) linear map of X with mild noise.
+    W_target = torch.randn(h, h, generator=g) * 0.5
+    Y = (X @ W_target) + 0.05 * torch.randn(64, h, generator=g)
+
+    torch.manual_seed(1)
+    m = TinyMLP()
+    o = LowRankAdamW(m.parameters(), lr=1e-2, betas=(0.9, 0.95))
+
+    # First backward to seed projectors at full rank for each Linear weight.
+    loss0 = ((m(X) - Y) ** 2).mean()
+    m.zero_grad(); loss0.backward()
+    for p in m.parameters():
+        if p.ndim == 2:
+            proj = make_projector_from_grad(p.grad, mode="two_sided", rank=min(p.shape))
+            o.attach_projector(p, proj)
+    o.step()
+
+    initial = loss0.item()
+    for _ in range(60):
+        loss = ((m(X) - Y) ** 2).mean()
+        m.zero_grad(); loss.backward(); o.step()
+
+    assert loss.item() < initial * 0.6, f"no progress: {initial:.4f} -> {loss.item():.4f}"
+
+
 def test_attach_projector_resets_state_shape():
     """attach_projector after a few dense steps must reset state to low-rank shape."""
     m = torch.nn.Linear(8, 6, bias=False)
