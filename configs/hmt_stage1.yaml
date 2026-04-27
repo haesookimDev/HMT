@@ -1,0 +1,50 @@
+# Stage 1: GaLore-style low-rank AdamW
+# Compares against configs/baseline_adamw.yaml under matching seeds.
+
+# `baseline` here selects the model loader (full-precision BF16); the actual
+# run identity is `training.optimizer: lowrank_adamw` below.
+baseline: adamw
+
+model:
+  name: EleutherAI/pythia-160m
+  dtype: bfloat16
+  gradient_checkpointing: false
+
+data:
+  dataset: wikitext
+  subset: wikitext-2-raw-v1
+  split: train
+  text_field: text
+  seq_length: 1024
+  streaming: true
+  shuffle_buffer: 1000
+  seed: 42
+
+training:
+  optimizer: lowrank_adamw
+  learning_rate: 2.0e-5
+  weight_decay: 0.01
+  betas: [0.9, 0.95]
+  eps: 1.0e-8
+  max_grad_norm: 1.0
+  batch_size: 1
+  gradient_accumulation_steps: 8
+  max_steps: 200
+  warmup_steps: 20
+  lr_schedule: cosine
+  lowrank:
+    mode: two_sided           # two_sided | left | right
+    rank: 64
+    basis_update_interval: 50 # K — recompute SVD bases every K optim steps
+    # Pythia (GPT-NeoX) Linear modules to project. For Llama-style models,
+    # use: "(q_proj|k_proj|v_proj|o_proj|gate_proj|up_proj|down_proj)"
+    target_pattern: "attention\\.(query_key_value|dense)|mlp\\.(dense_h_to_4h|dense_4h_to_h)"
+
+eval:
+  split: validation
+  interval: 50
+  max_batches: 50
+
+logging:
+  log_interval: 10
+  output_dir: ./outputs/hmt_stage1

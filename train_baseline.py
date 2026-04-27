@@ -1,20 +1,18 @@
-"""Stage 0 baseline trainer.
+"""Unified trainer for Stage 0 baselines and Stage 1+ HMT runs.
 
-Runs either an AdamW (full BF16) or QLoRA (4-bit + LoRA) baseline on a
-causal-LM corpus. Records loss, step time, tokens/sec, and peak GPU memory.
+Dispatches on ``training.optimizer``:
+  - ``adamw``          : full BF16 / fp32 AdamW (Stage 0 baseline)
+  - ``lowrank_adamw``  : Stage 1 GaLore-style low-rank AdamW
+  - QLoRA is selected via ``baseline: qlora`` and uses ``adamw`` internally.
 
-Usage:
-    python train_baseline.py --config configs/baseline_adamw.yaml
-    python train_baseline.py --config configs/baseline_qlora.yaml
-
-Comparison against HMT (later stages) is the purpose of these baselines.
+Records loss, step time, tokens/sec, and peak GPU memory; periodically
+evaluates perplexity on the validation split.
 """
 from __future__ import annotations
 
 import argparse
 import json
 import math
-import os
 from pathlib import Path
 
 import torch
@@ -24,6 +22,12 @@ from torch.optim import AdamW
 from hmt.data import DataConfig, build_dataloader
 from hmt.eval import evaluate_perplexity
 from hmt.model_loader import load_baseline_adamw, load_baseline_qlora
+from hmt.optim import (
+    LowRankAdamW,
+    attach_projectors_from_grads,
+    refresh_projectors_from_grads,
+    select_target_params,
+)
 from hmt.profiler import TrainingProfiler, format_step_stats, reset_peak_memory
 
 
@@ -116,13 +120,42 @@ def train(cfg: DictConfig) -> None:
         )
 
     trainable = [p for p in model.parameters() if p.requires_grad]
-    optim = AdamW(
-        trainable,
-        lr=cfg.training.learning_rate,
-        betas=tuple(cfg.training.betas),
-        eps=cfg.training.eps,
-        weight_decay=cfg.training.weight_decay,
-    )
+    opt_name = cfg.training.get("optimizer", "adamw")
+    lowrank_ctx = None
+    if opt_name == "adamw":
+        optim = AdamW(
+            trainable,
+            lr=cfg.training.learning_rate,
+            betas=tuple(cfg.training.betas),
+            eps=cfg.training.eps,
+            weight_decay=cfg.training.weight_decay,
+        )
+    elif opt_name == "lowrank_adamw":
+        lr_cfg = cfg.training.lowrank
+        optim = LowRankAdamW(
+            trainable,
+            lr=cfg.training.learning_rate,
+            betas=tuple(cfg.training.betas),
+            eps=cfg.training.eps,
+            weight_decay=cfg.training.weight_decay,
+        )
+        targets = select_target_params(model, pattern=lr_cfg.target_pattern)
+        if not targets:
+            raise RuntimeError(
+                f"target_pattern '{lr_cfg.target_pattern}' matched no nn.Linear modules. "
+                "Inspect model.named_modules() and adjust the pattern."
+            )
+        print(f"[init] lowrank_adamw: {len(targets)} target Linear modules, "
+              f"mode={lr_cfg.mode} rank={lr_cfg.rank} K={lr_cfg.basis_update_interval}")
+        lowrank_ctx = {
+            "targets": targets,
+            "mode": lr_cfg.mode,
+            "rank": int(lr_cfg.rank),
+            "K": int(lr_cfg.basis_update_interval),
+            "attached": False,
+        }
+    else:
+        raise ValueError(f"Unknown training.optimizer: {opt_name}")
 
     out_dir = Path(cfg.logging.output_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -179,6 +212,17 @@ def train(cfg: DictConfig) -> None:
         scale = lr_lambda(step, warmup, max_steps, schedule)
         for g in optim.param_groups:
             g["lr"] = base_lr * scale
+
+        if lowrank_ctx is not None:
+            if not lowrank_ctx["attached"]:
+                attached = attach_projectors_from_grads(
+                    optim, lowrank_ctx["targets"],
+                    mode=lowrank_ctx["mode"], rank=lowrank_ctx["rank"],
+                )
+                lowrank_ctx["attached"] = True
+                print(f"[init] attached projectors to {len(attached)} layers")
+            elif step > 0 and step % lowrank_ctx["K"] == 0:
+                refresh_projectors_from_grads(optim, lowrank_ctx["targets"])
 
         optim.step()
         optim.zero_grad(set_to_none=True)
