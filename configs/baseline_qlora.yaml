@@ -1,0 +1,48 @@
+# Stage 0 baseline: 4-bit base + LoRA adapters (QLoRA)
+# Requires CUDA + bitsandbytes. Will error out on CPU/MPS.
+
+baseline: qlora
+
+model:
+  name: meta-llama/Llama-3.2-1B
+  bnb_compute_dtype: bfloat16
+  gradient_checkpointing: true
+  lora:
+    r: 16
+    alpha: 32
+    dropout: 0.05
+    target_modules:
+      - q_proj
+      - k_proj
+      - v_proj
+      - o_proj
+      - gate_proj
+      - up_proj
+      - down_proj
+
+data:
+  dataset: wikitext
+  subset: wikitext-2-raw-v1
+  split: train
+  text_field: text
+  seq_length: 1024
+  streaming: true
+  shuffle_buffer: 1000
+  seed: 42
+
+training:
+  optimizer: adamw
+  learning_rate: 2.0e-4   # higher LR is standard for LoRA adapters
+  weight_decay: 0.0
+  betas: [0.9, 0.95]
+  eps: 1.0e-8
+  max_grad_norm: 1.0
+  batch_size: 1
+  gradient_accumulation_steps: 8
+  max_steps: 200
+  warmup_steps: 20
+  lr_schedule: cosine
+
+logging:
+  log_interval: 10
+  output_dir: ./outputs/baseline_qlora

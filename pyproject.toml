@@ -1,0 +1,38 @@
+[project]
+name = "hmt"
+version = "0.0.1"
+description = "Hierarchical Memory Training: Dynamic Low-Rank + Hybrid Activation Compression for LLM training in low-VRAM environments"
+requires-python = ">=3.10"
+dependencies = [
+    "torch>=2.2.0",
+    "transformers>=4.44.0",
+    "datasets>=2.20.0",
+    "accelerate>=0.33.0",
+    "peft>=0.12.0",
+    "omegaconf>=2.3.0",
+    "tqdm>=4.66.0",
+    "numpy>=1.26.0",
+    "sentencepiece>=0.2.0",
+]
+
+[project.optional-dependencies]
+# QLoRA (4-bit) baseline. CUDA only; not required for AdamW baseline.
+qlora = [
+    "bitsandbytes>=0.43.0",
+]
+# Logging / profiling
+logging = [
+    "tensorboard>=2.16.0",
+    "wandb>=0.17.0",
+]
+dev = [
+    "pytest>=8.0.0",
+    "ruff>=0.5.0",
+]
+
+[tool.setuptools.packages.find]
+include = ["hmt*"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py310"
