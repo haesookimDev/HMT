@@ -22,6 +22,7 @@ from omegaconf import DictConfig, OmegaConf
 from torch.optim import AdamW
 
 from hmt.data import DataConfig, build_dataloader
+from hmt.eval import evaluate_perplexity
 from hmt.model_loader import load_baseline_adamw, load_baseline_qlora
 from hmt.profiler import TrainingProfiler, format_step_stats, reset_peak_memory
 
@@ -99,6 +100,21 @@ def train(cfg: DictConfig) -> None:
     )
     loader = build_dataloader(data_cfg, tokenizer, batch_size=cfg.training.batch_size)
 
+    eval_cfg = cfg.get("eval", None)
+    eval_interval = int(eval_cfg.interval) if eval_cfg is not None else 0
+    eval_data_cfg = None
+    if eval_interval > 0:
+        eval_data_cfg = DataConfig(
+            dataset=cfg.data.dataset,
+            subset=cfg.data.get("subset"),
+            split=eval_cfg.split,
+            text_field=cfg.data.text_field,
+            seq_length=cfg.data.seq_length,
+            streaming=False,  # deterministic order; small validation set fits in RAM
+            shuffle_buffer=cfg.data.shuffle_buffer,
+            seed=cfg.data.seed,
+        )
+
     trainable = [p for p in model.parameters() if p.requires_grad]
     optim = AdamW(
         trainable,
@@ -171,6 +187,7 @@ def train(cfg: DictConfig) -> None:
         avg_loss = accum_loss / grad_accum
         stats = profiler.end_step(step=step, loss=avg_loss, tokens=accum_tokens)
         metrics_f.write(json.dumps({
+            "event": "train",
             "step": stats.step,
             "loss": stats.loss,
             "lr": base_lr * scale,
@@ -183,6 +200,29 @@ def train(cfg: DictConfig) -> None:
 
         if step % log_interval == 0 or step == 1:
             print(format_step_stats(stats))
+
+        if eval_interval > 0 and step % eval_interval == 0:
+            er = evaluate_perplexity(
+                model=model,
+                tokenizer=tokenizer,
+                data_cfg=eval_data_cfg,
+                device=device,
+                batch_size=cfg.training.batch_size,
+                max_batches=int(eval_cfg.max_batches),
+            )
+            print(
+                f"[eval ] step {step:>6d} | loss {er.loss:7.4f} | ppl {er.ppl:9.3f} | "
+                f"tokens {er.tokens} | batches {er.batches}"
+            )
+            metrics_f.write(json.dumps({
+                "event": "eval",
+                "step": step,
+                "eval_loss": er.loss,
+                "eval_ppl": er.ppl,
+                "eval_tokens": er.tokens,
+                "eval_batches": er.batches,
+            }) + "\n")
+            metrics_f.flush()
 
         accum_loss = 0.0
         accum_tokens = 0

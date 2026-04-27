@@ -32,6 +32,11 @@ training:
   warmup_steps: 20
   lr_schedule: cosine
 
+eval:
+  split: validation
+  interval: 50      # run eval every N optim steps; 0 disables
+  max_batches: 50   # cap eval batches for fast feedback
+
 logging:
   log_interval: 10
   output_dir: ./outputs/baseline_adamw

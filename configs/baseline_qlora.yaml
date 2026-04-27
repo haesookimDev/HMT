@@ -43,6 +43,11 @@ training:
   warmup_steps: 20
   lr_schedule: cosine
 
+eval:
+  split: validation
+  interval: 50
+  max_batches: 50
+
 logging:
   log_interval: 10
   output_dir: ./outputs/baseline_qlora

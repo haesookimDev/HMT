@@ -47,7 +47,7 @@ class PackedCausalLMDataset(IterableDataset):
 
     def __iter__(self) -> Iterator[dict[str, torch.Tensor]]:
         buffer: list[int] = []
-        target_len = self.seq_length + 1  # need one extra token for shift
+        seq_len = self.seq_length
         for example in self.hf_dataset:
             text = example.get(self.text_field)
             if not text:
@@ -56,12 +56,13 @@ class PackedCausalLMDataset(IterableDataset):
             buffer.extend(ids)
             buffer.append(self.eos_id)
 
-            while len(buffer) >= target_len:
-                chunk = buffer[:target_len]
-                buffer = buffer[target_len - 1:]  # overlap by 1 so labels align
-                input_ids = torch.tensor(chunk[:-1], dtype=torch.long)
-                labels = torch.tensor(chunk[1:], dtype=torch.long)
-                yield {"input_ids": input_ids, "labels": labels}
+            # HF CausalLM shifts internally inside forward(): logits[i] predicts
+            # labels[i+1]. Pass identical input_ids/labels and let the model do it.
+            while len(buffer) >= seq_len:
+                chunk = buffer[:seq_len]
+                buffer = buffer[seq_len:]
+                t = torch.tensor(chunk, dtype=torch.long)
+                yield {"input_ids": t, "labels": t.clone()}
 
 
 def build_dataloader(

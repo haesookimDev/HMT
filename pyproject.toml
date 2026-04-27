@@ -16,14 +16,24 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-# QLoRA (4-bit) baseline. CUDA only; not required for AdamW baseline.
+# QLoRA (4-bit) baseline. CUDA + Linux only — bitsandbytes ships no macOS wheel.
+# On macOS this group resolves to an empty set and the qlora baseline will
+# raise a clear RuntimeError at load time.
 qlora = [
-    "bitsandbytes>=0.43.0",
+    "bitsandbytes>=0.43.0; sys_platform == 'linux'",
+]
+# Stage 5 GPU kernels. Linux+CUDA only.
+kernels = [
+    "triton>=2.3.0; sys_platform == 'linux'",
 ]
 # Logging / profiling
 logging = [
     "tensorboard>=2.16.0",
     "wandb>=0.17.0",
+]
+# Plotting metrics.jsonl
+viz = [
+    "matplotlib>=3.8.0",
 ]
 dev = [
     "pytest>=8.0.0",
