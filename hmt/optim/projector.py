@@ -23,7 +23,10 @@ from typing import Literal, Optional
 
 import torch
 
+from hmt.optim.spectrum import randomized_svd
+
 ProjectionMode = Literal["two_sided", "left", "right"]
+SVDMethod = Literal["full", "randomized"]
 
 
 @dataclass
@@ -34,6 +37,7 @@ class LayerProjector:
     in_dim: int
     P: Optional[torch.Tensor] = None  # [out_dim, rank]
     Q: Optional[torch.Tensor] = None  # [in_dim, rank]
+    method: SVDMethod = "full"  # SVD method to use for refresh_
 
     def __post_init__(self) -> None:
         if self.rank <= 0:
@@ -74,11 +78,28 @@ class LayerProjector:
     @torch.no_grad()
     def refresh_(self, grad: torch.Tensor) -> None:
         """Recompute P/Q from ``grad``'s SVD. Mutates self in-place."""
-        P, Q = update_projection_basis(grad, mode=self.mode, rank=self.rank)
+        P, Q = update_projection_basis(grad, mode=self.mode, rank=self.rank, method=self.method)
         if P is not None:
             self.P = P
         if Q is not None:
             self.Q = Q
+
+
+def _compute_top_singular(
+    grad: torch.Tensor,
+    *,
+    rank: int,
+    method: SVDMethod,
+    oversample: int = 8,
+    n_iter: int = 2,
+) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+    """Top-``rank`` ``(U, S, Vh)`` of ``grad`` via full or randomized SVD."""
+    if method == "full":
+        U, S, Vh = torch.linalg.svd(grad.detach().float(), full_matrices=False)
+        return U[:, :rank].contiguous(), S[:rank].contiguous(), Vh[:rank, :].contiguous()
+    if method == "randomized":
+        return randomized_svd(grad, rank=rank, oversample=oversample, n_iter=n_iter)
+    raise ValueError(f"unknown svd method: {method}")
 
 
 @torch.no_grad()
@@ -87,6 +108,9 @@ def update_projection_basis(
     *,
     mode: ProjectionMode,
     rank: int,
+    method: SVDMethod = "full",
+    oversample: int = 8,
+    n_iter: int = 2,
 ) -> tuple[Optional[torch.Tensor], Optional[torch.Tensor]]:
     """Compute SVD-based projection bases for one 2D gradient.
 
@@ -98,14 +122,15 @@ def update_projection_basis(
     out_dim, in_dim = grad.shape
     eff_rank = min(rank, out_dim, in_dim)
 
-    # SVD in fp32 for numerical stability, even when grad is bf16/fp16.
-    U, _S, Vh = torch.linalg.svd(grad.detach().float(), full_matrices=False)
+    U, _S, Vh = _compute_top_singular(
+        grad, rank=eff_rank, method=method, oversample=oversample, n_iter=n_iter,
+    )
     P = None
     Q = None
     if mode in ("two_sided", "left"):
-        P = U[:, :eff_rank].to(dtype=grad.dtype, device=grad.device).contiguous()
+        P = U.to(dtype=grad.dtype, device=grad.device).contiguous()
     if mode in ("two_sided", "right"):
-        Q = Vh[:eff_rank, :].T.to(dtype=grad.dtype, device=grad.device).contiguous()
+        Q = Vh.T.to(dtype=grad.dtype, device=grad.device).contiguous()
     return P, Q
 
 
@@ -114,12 +139,51 @@ def make_projector_from_grad(
     *,
     mode: ProjectionMode,
     rank: int,
+    method: SVDMethod = "full",
+    oversample: int = 8,
+    n_iter: int = 2,
 ) -> LayerProjector:
     if grad.ndim != 2:
         raise ValueError(f"grad must be 2D, got shape {tuple(grad.shape)}")
     out_dim, in_dim = grad.shape
     eff_rank = min(rank, out_dim, in_dim)
-    P, Q = update_projection_basis(grad, mode=mode, rank=eff_rank)
+    P, Q = update_projection_basis(
+        grad, mode=mode, rank=eff_rank, method=method, oversample=oversample, n_iter=n_iter,
+    )
     return LayerProjector(
-        mode=mode, rank=eff_rank, out_dim=out_dim, in_dim=in_dim, P=P, Q=Q,
+        mode=mode, rank=eff_rank, out_dim=out_dim, in_dim=in_dim, P=P, Q=Q, method=method,
+    )
+
+
+def make_projector_with_scheduler(
+    grad: torch.Tensor,
+    *,
+    mode: ProjectionMode,
+    scheduler,
+    method: SVDMethod = "full",
+    oversample: int = 8,
+    n_iter: int = 2,
+) -> LayerProjector:
+    """Use ``scheduler.select_rank`` to choose a rank from this gradient's
+    spectrum, then build a projector at that rank.
+
+    Computes singular values up to ``max(scheduler.candidates)``.
+    """
+    if grad.ndim != 2:
+        raise ValueError(f"grad must be 2D, got shape {tuple(grad.shape)}")
+    out_dim, in_dim = grad.shape
+    max_candidate = int(max(scheduler.candidates))
+    probe_rank = min(max_candidate, out_dim, in_dim)
+    U, S, Vh = _compute_top_singular(
+        grad, rank=probe_rank, method=method, oversample=oversample, n_iter=n_iter,
+    )
+    eff_rank = min(scheduler.select_rank(S), out_dim, in_dim)
+    P = None
+    Q = None
+    if mode in ("two_sided", "left"):
+        P = U[:, :eff_rank].to(dtype=grad.dtype, device=grad.device).contiguous()
+    if mode in ("two_sided", "right"):
+        Q = Vh[:eff_rank, :].T.to(dtype=grad.dtype, device=grad.device).contiguous()
+    return LayerProjector(
+        mode=mode, rank=eff_rank, out_dim=out_dim, in_dim=in_dim, P=P, Q=Q, method=method,
     )

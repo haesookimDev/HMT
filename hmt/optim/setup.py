@@ -2,16 +2,24 @@
 
 Selects target ``nn.Linear`` modules by regex on qualified module name, then
 attaches / refreshes SVD-based projectors using their current ``.weight.grad``.
+Supports either a fixed per-layer rank or an ``EnergyRankScheduler``.
 """
 from __future__ import annotations
 
 import re
-from typing import Iterable
+from typing import Iterable, Optional
 
 import torch
 
 from hmt.optim.lowrank_adamw import LowRankAdamW
-from hmt.optim.projector import LayerProjector, ProjectionMode, make_projector_from_grad
+from hmt.optim.projector import (
+    LayerProjector,
+    ProjectionMode,
+    SVDMethod,
+    make_projector_from_grad,
+    make_projector_with_scheduler,
+)
+from hmt.optim.rank_scheduler import EnergyRankScheduler
 
 
 def select_target_params(
@@ -39,15 +47,28 @@ def attach_projectors_from_grads(
     target_params: Iterable[tuple[str, torch.nn.Parameter]],
     *,
     mode: ProjectionMode,
-    rank: int,
+    rank: Optional[int] = None,
+    scheduler: Optional[EnergyRankScheduler] = None,
+    method: SVDMethod = "full",
 ) -> dict[str, LayerProjector]:
-    """Build an SVD-based projector from each target's current gradient and
-    attach it to ``optim``. Returns name->projector for logging."""
+    """Build an SVD-based projector from each target's current gradient.
+
+    Provide either ``rank`` (fixed) or ``scheduler`` (energy-based per-layer).
+    """
+    if (rank is None) == (scheduler is None):
+        raise ValueError("specify exactly one of `rank` or `scheduler`")
     out: dict[str, LayerProjector] = {}
     for name, p in target_params:
         if p.grad is None or p.ndim != 2:
             continue
-        proj = make_projector_from_grad(p.grad, mode=mode, rank=rank)
+        if scheduler is not None:
+            proj = make_projector_with_scheduler(
+                p.grad, mode=mode, scheduler=scheduler, method=method,
+            )
+        else:
+            proj = make_projector_from_grad(
+                p.grad, mode=mode, rank=int(rank), method=method,
+            )
         optim.attach_projector(p, proj)
         out[name] = proj
     return out
