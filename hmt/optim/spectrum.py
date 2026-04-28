@@ -46,7 +46,15 @@ def randomized_svd(
     if n_iter < 0:
         raise ValueError(f"n_iter must be non-negative, got {n_iter}")
 
+    target_device = A.device
+    # MPS ships no linalg_qr op (and the linalg_svd fallback is per-call). To
+    # avoid repeated MPS↔CPU bouncing, do all of randomized SVD on CPU when
+    # the input is on MPS. Result is moved back at the end.
+    work_on_cpu = target_device.type == "mps"
     A_fp32 = A.detach().float()
+    if work_on_cpu:
+        A_fp32 = A_fp32.cpu()
+
     m, n = A_fp32.shape
     k = min(rank, m, n)
     sketch = min(k + oversample, n, m)
@@ -72,4 +80,11 @@ def randomized_svd(
     Ub, S, Vh = torch.linalg.svd(B, full_matrices=False)
     U = Q @ Ub                        # [m, sketch]
 
-    return U[:, :k].contiguous(), S[:k].contiguous(), Vh[:k, :].contiguous()
+    U = U[:, :k].contiguous()
+    S = S[:k].contiguous()
+    Vh = Vh[:k, :].contiguous()
+    if work_on_cpu:
+        U = U.to(target_device)
+        S = S.to(target_device)
+        Vh = Vh.to(target_device)
+    return U, S, Vh

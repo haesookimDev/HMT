@@ -23,6 +23,7 @@ from hmt.data import DataConfig, build_dataloader
 from hmt.eval import evaluate_perplexity
 from hmt.model_loader import load_baseline_adamw, load_baseline_qlora
 from hmt.optim import (
+    EnergyRankScheduler,
     LowRankAdamW,
     attach_projectors_from_grads,
     refresh_projectors_from_grads,
@@ -145,12 +146,34 @@ def train(cfg: DictConfig) -> None:
                 f"target_pattern '{lr_cfg.target_pattern}' matched no nn.Linear modules. "
                 "Inspect model.named_modules() and adjust the pattern."
             )
-        print(f"[init] lowrank_adamw: {len(targets)} target Linear modules, "
-              f"mode={lr_cfg.mode} rank={lr_cfg.rank} K={lr_cfg.basis_update_interval}")
+
+        sched_cfg = lr_cfg.get("rank_scheduler", None)
+        if sched_cfg is not None:
+            scheduler = EnergyRankScheduler(
+                candidates=tuple(int(c) for c in sched_cfg.candidates),
+                threshold=float(sched_cfg.threshold),
+            )
+            rank_arg = None
+            rank_desc = (
+                f"scheduler(τ={sched_cfg.threshold}, "
+                f"candidates={list(scheduler.candidates)})"
+            )
+        else:
+            scheduler = None
+            rank_arg = int(lr_cfg.rank)
+            rank_desc = f"rank={rank_arg}"
+
+        method = str(lr_cfg.get("method", "full"))
+        print(
+            f"[init] lowrank_adamw: {len(targets)} target Linear modules, "
+            f"mode={lr_cfg.mode} {rank_desc} method={method} K={lr_cfg.basis_update_interval}"
+        )
         lowrank_ctx = {
             "targets": targets,
             "mode": lr_cfg.mode,
-            "rank": int(lr_cfg.rank),
+            "rank": rank_arg,
+            "scheduler": scheduler,
+            "method": method,
             "K": int(lr_cfg.basis_update_interval),
             "attached": False,
         }
@@ -217,10 +240,25 @@ def train(cfg: DictConfig) -> None:
             if not lowrank_ctx["attached"]:
                 attached = attach_projectors_from_grads(
                     optim, lowrank_ctx["targets"],
-                    mode=lowrank_ctx["mode"], rank=lowrank_ctx["rank"],
+                    mode=lowrank_ctx["mode"],
+                    rank=lowrank_ctx["rank"],
+                    scheduler=lowrank_ctx["scheduler"],
+                    method=lowrank_ctx["method"],
                 )
                 lowrank_ctx["attached"] = True
-                print(f"[init] attached projectors to {len(attached)} layers")
+                rank_log = {name: int(proj.rank) for name, proj in attached.items()}
+                if rank_log:
+                    avg = sum(rank_log.values()) / len(rank_log)
+                    mn = min(rank_log.values())
+                    mx = max(rank_log.values())
+                    print(
+                        f"[init] attached projectors to {len(attached)} layers, "
+                        f"rank avg={avg:.1f} min={mn} max={mx}"
+                    )
+                    (out_dir / "ranks.json").write_text(json.dumps({
+                        "ranks": rank_log,
+                        "avg": avg, "min": mn, "max": mx,
+                    }, indent=2))
             elif step > 0 and step % lowrank_ctx["K"] == 0:
                 refresh_projectors_from_grads(optim, lowrank_ctx["targets"])
 
