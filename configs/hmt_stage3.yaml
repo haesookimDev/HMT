@@ -1,0 +1,65 @@
+# Stage 3: hybrid activation compression layered on Stage 2 (low-rank + scheduler)
+# README §3.4 policy:
+#   embedding / layernorm / residual / lm_head → keep BF16
+#   attention QKV                              → recompute (not yet implemented)
+#   attention output, MLP intermediates        → INT8 block-wise compression
+# Stage 3 v1 implements `keep` and `compress_int8`. `recompute` and
+# `compress_fp8` are reserved for follow-ups.
+
+baseline: adamw   # full-precision BF16 model loader
+
+model:
+  name: EleutherAI/pythia-160m
+  dtype: bfloat16
+  gradient_checkpointing: false
+
+data:
+  dataset: wikitext
+  subset: wikitext-2-raw-v1
+  split: train
+  text_field: text
+  seq_length: 1024
+  streaming: true
+  shuffle_buffer: 1000
+  seed: 42
+
+training:
+  optimizer: lowrank_adamw
+  learning_rate: 2.0e-5
+  weight_decay: 0.01
+  betas: [0.9, 0.95]
+  eps: 1.0e-8
+  max_grad_norm: 1.0
+  batch_size: 1
+  gradient_accumulation_steps: 8
+  max_steps: 200
+  warmup_steps: 20
+  lr_schedule: cosine
+  lowrank:
+    mode: two_sided
+    method: randomized
+    basis_update_interval: 50
+    rank_scheduler:
+      candidates: [32, 64, 128, 256]
+      threshold: 0.95
+    target_pattern: "attention\\.(query_key_value|dense)|mlp\\.(dense_h_to_4h|dense_4h_to_h)"
+
+activation_policy:
+  block_size: 256
+  default: keep
+  rules:
+    - pattern: "mlp\\.dense_h_to_4h"
+      action: compress_int8
+    - pattern: "mlp\\.dense_4h_to_h"
+      action: compress_int8
+    - pattern: "attention\\.dense"
+      action: compress_int8
+
+eval:
+  split: validation
+  interval: 50
+  max_batches: 50
+
+logging:
+  log_interval: 10
+  output_dir: ./outputs/hmt_stage3

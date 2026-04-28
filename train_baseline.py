@@ -182,6 +182,21 @@ def train(cfg: DictConfig) -> None:
     else:
         raise ValueError(f"Unknown training.optimizer: {opt_name}")
 
+    # Stage 3: activation memory policy. Patch nn.Linear → CompressedLinear
+    # AFTER select_target_params has already captured weight references for
+    # the low-rank optimizer (parameter identity is preserved through patching).
+    act_cfg = cfg.get("activation_policy", None)
+    if act_cfg is not None:
+        policy = ActivationPolicy.from_config(act_cfg)
+        patched = patch_model_int8_linear(model, policy)
+        if patched:
+            print(
+                f"[init] activation compression: patched {len(patched)} Linear modules "
+                f"to INT8 (block_size={policy.block_size})"
+            )
+        else:
+            print("[init] activation compression: policy matched no nn.Linear modules")
+
     out_dir = Path(cfg.logging.output_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
     metrics_path = out_dir / "metrics.jsonl"
