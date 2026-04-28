@@ -22,6 +22,8 @@ from torch.optim import AdamW
 from hmt.data import DataConfig, build_dataloader
 from hmt.eval import evaluate_perplexity
 from hmt.model_loader import load_baseline_adamw, load_baseline_qlora
+from hmt.autograd import patch_model_int8_linear
+from hmt.memory import ActivationPolicy
 from hmt.optim import (
     EnergyRankScheduler,
     LowRankAdamW,
