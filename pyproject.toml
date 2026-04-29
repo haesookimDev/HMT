@@ -46,3 +46,7 @@ include = ["hmt*"]
 [tool.ruff]
 line-length = 100
 target-version = "py310"
+
+[tool.ruff.lint.per-file-ignores]
+# Tests intentionally use compact `m.zero_grad(); loss.backward(); o.step()` lines.
+"tests/*" = ["E702"]

@@ -61,10 +61,15 @@ def main() -> None:
     if plotted == 0:
         raise SystemExit("No metrics.jsonl found in any of the given dirs.")
 
-    ax_loss.set_title("Train loss"); ax_loss.set_xlabel("step"); ax_loss.set_ylabel("CE loss")
-    ax_ppl.set_title("Eval perplexity"); ax_ppl.set_xlabel("step"); ax_ppl.set_ylabel("PPL")
-    ax_tps.set_title("Throughput"); ax_tps.set_xlabel("step"); ax_tps.set_ylabel("tokens / sec")
-    ax_mem.set_title("Peak GPU memory"); ax_mem.set_xlabel("step"); ax_mem.set_ylabel("MB")
+    for ax, title, ylabel in [
+        (ax_loss, "Train loss", "CE loss"),
+        (ax_ppl, "Eval perplexity", "PPL"),
+        (ax_tps, "Throughput", "tokens / sec"),
+        (ax_mem, "Peak GPU memory", "MB"),
+    ]:
+        ax.set_title(title)
+        ax.set_xlabel("step")
+        ax.set_ylabel(ylabel)
     for ax in (ax_loss, ax_ppl, ax_tps, ax_mem):
         ax.grid(alpha=0.3)
         if ax.has_data():

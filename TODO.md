@@ -16,17 +16,19 @@
 - `[x]` 완료 (verify 조건 통과)
 - `[!]` 블로커 / 디펜던시 대기
 
-## 현재 상태 (2026-04-27)
+## 현재 상태 (2026-04-29)
 
 - Stage 0: 0.1 ~ 0.4 verify 통과. 0.5 CUDA-블록.
 - Stage 1: 1.1 ~ 1.6 verify 통과. step 8 loss baseline 4.366 vs HMT 4.520 (3.5%).
 - Stage 2: 2.1 ~ 2.5 verify 통과 (2.3 K-sweep 부분). attn.qkv avg=40, mlp avg=128.
-- Stage 3: 3.1 ~ 3.5 verify 통과 (3.5 peak VRAM 측정은 CUDA 필요).
-  - `hmt/memory/{activation_compress,policy}.py`, `hmt/autograd/compressed_linear.py` (+22 tests, 누적 57 tests / 2.0s)
-  - **INT8 absmax round-trip Frob err ~0.7%** (intrinsic int8 한계; README의 0.5%는 block_size=32일 때만 달성). block_size↑ → err↑ 단조성 검증
-  - 두 기능 합성 작동: 36 Linear에 INT8 패칭 + 48 Linear에 low-rank projector
-  - smoke step 8 loss Stage 2 4.465 → Stage 3 4.505 (+0.9%, int8 noise 한도 내), eval ppl 79.97 → 80.01 (사실상 동일)
-- 다음 작업: **Stage 4** (CPU basis cache) — Linux+CUDA 의존도 높음. 또는 횡단 작업 C.3 / C.1 검토.
+- Stage 3: 3.1 ~ 3.5 verify 통과 (3.5 peak VRAM은 CUDA 필요).
+- Stage 6.1: tensor / channel scaling 구현 + smoke 통과. 6.2 (rank-1) 보류, 6.3 (ablation) 부분.
+  - smoke step 8 PPL: AdamW 65.5, HMT Stage 1-3 ~80, **APOLLO channel 59.2** (짧은 run 노이즈 가능; long-run 비교는 후속)
+- 횡단 (Cross-cutting):
+  - C.1 `.github/workflows/ci.yml` — ruff + pytest on Ubuntu CPU runner ✅
+  - C.2 `hmt/utils/seed.py` — `seed_everything` (Python random + numpy + torch CPU/CUDA/MPS) ✅
+- 누적 테스트: **70 passed / 2.05s**, ruff clean
+- 다음 작업: **Stage 4** (CPU basis cache, CUDA 필요) 또는 **Stage 7** (통합 트레이너) 또는 long-run 실제 비교 (원격 GPU).
 
 ---
 
@@ -158,15 +160,17 @@
 
 ## Stage 6 — APOLLO-style Optimizer
 
-- [ ] **6.1 `hmt/optim/scaling.py`** — tensor-wise / channel-wise scaling
-  - verify: 같은 합성 문제에서 GaLore-style과 수렴 비교
+- [x] **6.1 `hmt/optim/apollo.py`** — `ApolloAdamW(scaling="tensor"|"channel")`
+  - what: AdamW의 per-element ``v``를 (a) 스칼라 또는 (b) per-row 벡터로 coarse-grain. ``m``은 full shape 유지 (decoupled wd). 1D 파라미터도 지원
+  - verify: 두 모드에서 state 원소 수 = AdamW의 ~1/2 (768² 가중치 기준 1.97×); toy regression 100 step 수렴; 합성 wd > 0 시 가중치 감소; 잘못된 입력 ValueError ✅
+  - smoke (8 step): step 8 loss 4.542 vs AdamW 4.366 (~4%); eval PPL **59.2** vs AdamW 65.5 (짧은 run 노이즈)
 
-- [ ] **6.2 `hmt/optim/apollo.py`** — APOLLO + APOLLO-Mini (rank-1)
-  - verify: optimizer state mem이 GaLore Mode A 대비 추가 감소
+- [!] **6.2 APOLLO-Mini (rank-1 auxiliary state)** — 보류
+  - 이유: 복잡도 (auxiliary low-rank state 유지 알고리즘 → 별도 설계 + 테스트 필요). 6.1과 GaLore (Stage 1) 조합으로도 비슷한 메모리 절감 가능
+  - 후속에서 처리할 경우: state는 ``u ⊗ w`` (벡터 2개), update를 outer-product로 근사
 
-- [ ] **6.3 GaLore vs APOLLO ablation**
-  - what: 동일 dataset/모델/예산
-  - verify: 학습 안정성 + loss 동등 또는 더 나음, mem ↓
+- [~] **6.3 GaLore vs APOLLO ablation** — 부분
+  - 단일-step smoke 비교 완료 (위). long-run 정량 비교는 동일 시드/예산으로 200+ step 필요 → 원격 CUDA에서 batch 실험으로 진행
 
 ---
 
@@ -191,10 +195,10 @@
 
 ## 횡단 (Cross-cutting)
 
-- [ ] **C.1 GitHub Actions** — lint(ruff) + Stage 1/2 단위테스트만 (모델 다운로드 X, dummy transformer 사용)
-- [ ] **C.2 결정성** — `seed_everything()`, `torch.use_deterministic_algorithms(True)` 옵션
-- [ ] **C.3 로깅 추상화** — JSONL / TensorBoard / W&B를 동일 인터페이스로. Stage 1 시작 전에 도입
-- [ ] **C.4 원격 학습 가이드** — RunPod / Lambda Labs 같은 원격 CUDA 머신에서 실행 절차 (mac에서는 큰 모델 학습 불가)
+- [x] **C.1 GitHub Actions** — `.github/workflows/ci.yml`. Ubuntu CPU + uv + ruff + pytest. 모델 다운로드 없는 합성/dummy 데이터로 70 tests 검증
+- [x] **C.2 결정성** — `hmt/utils/seed.py`의 `seed_everything(seed, deterministic=False)`. Python random + numpy + torch CPU/CUDA/MPS 시드. `train_baseline.py`에 통합. ruff clean
+- [ ] **C.3 로깅 추상화** — JSONL / TensorBoard / W&B 단일 인터페이스. (W&B 도입 시점에)
+- [ ] **C.4 원격 학습 가이드** — RunPod / Lambda Labs 절차 문서
 
 ---
 

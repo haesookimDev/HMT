@@ -6,7 +6,6 @@ import torch
 
 from hmt.memory import (
     BlockwiseInt8Compressor,
-    PackedInt8,
     compress_blockwise_int8,
     decompress_blockwise_int8,
 )

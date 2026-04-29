@@ -9,7 +9,6 @@ noise on ``grad_w`` and a small dequantization compute on backward.
 """
 from __future__ import annotations
 
-from typing import Optional
 
 import torch
 

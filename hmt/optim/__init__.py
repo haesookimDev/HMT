@@ -1,3 +1,4 @@
+from hmt.optim.apollo import ApolloAdamW, ScalingMode
 from hmt.optim.lowrank_adamw import LowRankAdamW
 from hmt.optim.projector import (
     LayerProjector,
@@ -16,11 +17,13 @@ from hmt.optim.setup import (
 from hmt.optim.spectrum import randomized_svd
 
 __all__ = [
+    "ApolloAdamW",
     "EnergyRankScheduler",
     "LayerProjector",
     "LowRankAdamW",
     "ProjectionMode",
     "SVDMethod",
+    "ScalingMode",
     "attach_projectors_from_grads",
     "make_projector_from_grad",
     "make_projector_with_scheduler",

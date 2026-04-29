@@ -25,6 +25,7 @@ from hmt.model_loader import load_baseline_adamw, load_baseline_qlora
 from hmt.autograd import patch_model_int8_linear
 from hmt.memory import ActivationPolicy
 from hmt.optim import (
+    ApolloAdamW,
     EnergyRankScheduler,
     LowRankAdamW,
     attach_projectors_from_grads,
@@ -32,6 +33,7 @@ from hmt.optim import (
     select_target_params,
 )
 from hmt.profiler import TrainingProfiler, format_step_stats, reset_peak_memory
+from hmt.utils import seed_everything
 
 
 def pick_device() -> torch.device:
@@ -80,8 +82,10 @@ def lr_lambda(step: int, warmup: int, total: int, schedule: str) -> float:
 
 
 def train(cfg: DictConfig) -> None:
+    seed = int(cfg.get("seed", cfg.data.seed))
+    seed_everything(seed, deterministic=bool(cfg.get("deterministic", False)))
     device = pick_device()
-    print(f"[init] device={device}  baseline={cfg.baseline}  model={cfg.model.name}")
+    print(f"[init] device={device}  baseline={cfg.baseline}  model={cfg.model.name}  seed={seed}")
 
     loaded = build_model(cfg)
     model, tokenizer = loaded.model, loaded.tokenizer
@@ -179,6 +183,17 @@ def train(cfg: DictConfig) -> None:
             "K": int(lr_cfg.basis_update_interval),
             "attached": False,
         }
+    elif opt_name == "apollo_adamw":
+        apollo_cfg = cfg.training.apollo
+        optim = ApolloAdamW(
+            trainable,
+            lr=cfg.training.learning_rate,
+            betas=tuple(cfg.training.betas),
+            eps=cfg.training.eps,
+            weight_decay=cfg.training.weight_decay,
+            scaling=str(apollo_cfg.scaling),
+        )
+        print(f"[init] apollo_adamw: scaling={apollo_cfg.scaling}")
     else:
         raise ValueError(f"Unknown training.optimizer: {opt_name}")
 

@@ -12,7 +12,7 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass, field
-from typing import Iterable, Literal, Optional
+from typing import Iterable, Literal
 
 ActivationAction = Literal["keep", "compress_int8", "compress_fp8", "recompute"]
 _VALID_ACTIONS: tuple[ActivationAction, ...] = ("keep", "compress_int8", "compress_fp8", "recompute")
