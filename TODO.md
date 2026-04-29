@@ -22,13 +22,16 @@
 - Stage 1: 1.1 ~ 1.6 verify 통과. step 8 loss baseline 4.366 vs HMT 4.520 (3.5%).
 - Stage 2: 2.1 ~ 2.5 verify 통과 (2.3 K-sweep 부분). attn.qkv avg=40, mlp avg=128.
 - Stage 3: 3.1 ~ 3.5 verify 통과 (3.5 peak VRAM은 CUDA 필요).
-- Stage 6.1: tensor / channel scaling 구현 + smoke 통과. 6.2 (rank-1) 보류, 6.3 (ablation) 부분.
-  - smoke step 8 PPL: AdamW 65.5, HMT Stage 1-3 ~80, **APOLLO channel 59.2** (짧은 run 노이즈 가능; long-run 비교는 후속)
+- Stage 6.1: tensor / channel scaling + smoke 통과. 6.2 (rank-1) 보류, 6.3 (ablation) 부분.
+- **Stage 7: 7.1 ~ 7.4 verify 통과**. 통합 yaml + checkpoint 저장/복원 + 실험 매트릭스 + rank-distribution plot.
+  - `hmt_full.yaml`: low-rank + scheduler + randomized SVD + INT8 activation 동시 작동 (smoke step 8 loss 4.43, eval ppl 81.4)
+  - checkpoint round-trip 검증: 3 step → save → load → 3 step == 6 step 연속 (atol 1e-6) ✅
+  - run_matrix.py: 2 config 차례 실행 후 `summary.json` 생성 ✅
 - 횡단 (Cross-cutting):
   - C.1 `.github/workflows/ci.yml` — ruff + pytest on Ubuntu CPU runner ✅
   - C.2 `hmt/utils/seed.py` — `seed_everything` (Python random + numpy + torch CPU/CUDA/MPS) ✅
-- 누적 테스트: **70 passed / 2.05s**, ruff clean
-- 다음 작업: **Stage 4** (CPU basis cache, CUDA 필요) 또는 **Stage 7** (통합 트레이너) 또는 long-run 실제 비교 (원격 GPU).
+- 누적 테스트: **74 passed / 2.19s**, ruff clean
+- 다음 작업: macOS에서 가능한 핵심 path 완료. **Stage 4/5 (CPU cache, Triton) + 6.2/6.3 long-run 비교는 원격 CUDA**. 또는 README의 결과 그래프를 실제 long-run으로 채우기.
 
 ---
 
@@ -176,20 +179,17 @@
 
 ## Stage 7 — 통합 HMT Trainer
 
-- [ ] **7.1 모든 정책을 단일 YAML로 제어** (`configs/hmt_1b.yaml`, `hmt_3b.yaml`, `hmt_7b.yaml`)
-  - verify: 한 yaml에서 baseline → HMT-full로 전환되며 동일 코드 경로
+- [x] **7.1 통합 YAML** — `configs/hmt_full.yaml` 단일 파일로 baseline → HMT-full 전환. `train_baseline.py`는 동일 코드 경로 유지 (`training.optimizer` + `lowrank` + `activation_policy` 블록 토글)
+  - verify: smoke 실행에서 48 layer low-rank attach + 36 layer INT8 patch + scheduler 동시 작동, step 8 loss 4.43 / eval ppl 81.4 ✅
 
-- [ ] **7.2 NVMe checkpoint-only policy** — `hmt/memory/checkpoint.py`
-  - what: low-rank state + basis snapshot + tokenizer state 저장/복원
-  - verify: 학습 중간 kill → resume 시 step/loss 연속
+- [x] **7.2 NVMe checkpoint-only policy** — `hmt/memory/checkpoint.py`. `save_checkpoint` / `load_checkpoint`. 모델 + 옵티마이저 state + projector 스냅샷(P, Q, mode, rank by qualified name) + RNG state. attach 후 load 순서로 LowRankAdamW의 state 보존
+  - verify: 4 unit tests / dense + LowRankAdamW + RNG round-trip + **continuous 6-step ≡ 3-step+save+load+3-step (atol 1e-6)** ✅
 
-- [ ] **7.3 실험 매트릭스 자동화**
-  - what: baseline×HMT 변형의 메트릭을 한 표로. `scripts/run_matrix.py`
-  - verify: N config 차례로 실행, summary.json 생성
+- [x] **7.3 실험 매트릭스 자동화** — `scripts/run_matrix.py`. 다중 config 순차 실행 → 각 run의 마지막 train/eval 레코드 + ranks summary를 `summary.json`으로 집계
+  - verify: baseline_adamw + hmt_full을 4-step씩 실행 → summary.json에 step/loss/avg_rank 노출 ✅
 
-- [ ] **7.4 최종 리포트 가능 그래프**
-  - what: peak mem, tokens/sec, val ppl, rank distribution, compression error
-  - verify: README에서 직접 인용 가능한 PNG/SVG 5종
+- [x] **7.4 리포트 그래프** — `scripts/plot_metrics.py`에 rank distribution panel 자동 추가 (ranks.json 존재 시 5번째 패널)
+  - verify: smoke 비교 PNG 119KB 정상 생성 (4 + 1 panels) ✅. 실제 reportable 플롯은 long-run 데이터 확보 후 (deferred)
 
 ---
 

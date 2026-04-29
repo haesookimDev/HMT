@@ -30,14 +30,29 @@ def load_metrics(jsonl_path: Path) -> tuple[list[dict], list[dict]]:
     return train, evalrec
 
 
+def _load_ranks(d: Path) -> dict | None:
+    p = d / "ranks.json"
+    if not p.exists():
+        return None
+    return json.loads(p.read_text())
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("dirs", nargs="+", type=Path, help="Output dirs containing metrics.jsonl")
     parser.add_argument("--out", type=Path, default=None, help="Output PNG (default: <first dir>/plots.png)")
     args = parser.parse_args()
 
-    fig, axes = plt.subplots(2, 2, figsize=(12, 8))
-    ax_loss, ax_ppl, ax_tps, ax_mem = axes.flatten()
+    # Auto-detect whether any dir has a ranks.json (HMT runs); add a 5th panel.
+    has_ranks = any(_load_ranks(d) is not None for d in args.dirs)
+    if has_ranks:
+        fig, axes = plt.subplots(2, 3, figsize=(16, 8))
+        ax_loss, ax_ppl, ax_tps, ax_mem, ax_rank, ax_blank = axes.flatten()
+        ax_blank.axis("off")
+    else:
+        fig, axes = plt.subplots(2, 2, figsize=(12, 8))
+        ax_loss, ax_ppl, ax_tps, ax_mem = axes.flatten()
+        ax_rank = None
 
     plotted = 0
     for d in args.dirs:
@@ -56,21 +71,31 @@ def main() -> None:
         if evalrec:
             esteps = [r["step"] for r in evalrec]
             ax_ppl.plot(esteps, [r["eval_ppl"] for r in evalrec], marker="o", label=label)
+
+        if ax_rank is not None:
+            data = _load_ranks(d)
+            if data is not None:
+                ranks = list(data["ranks"].values())
+                ax_rank.hist(ranks, bins=12, alpha=0.5, label=f"{label} (avg={data.get('avg', 0):.0f})")
+
         plotted += 1
 
     if plotted == 0:
         raise SystemExit("No metrics.jsonl found in any of the given dirs.")
 
-    for ax, title, ylabel in [
-        (ax_loss, "Train loss", "CE loss"),
-        (ax_ppl, "Eval perplexity", "PPL"),
-        (ax_tps, "Throughput", "tokens / sec"),
-        (ax_mem, "Peak GPU memory", "MB"),
-    ]:
+    panels = [
+        (ax_loss, "Train loss", "step", "CE loss"),
+        (ax_ppl, "Eval perplexity", "step", "PPL"),
+        (ax_tps, "Throughput", "step", "tokens / sec"),
+        (ax_mem, "Peak GPU memory", "step", "MB"),
+    ]
+    if ax_rank is not None:
+        panels.append((ax_rank, "Per-layer rank distribution", "rank", "layers"))
+
+    for ax, title, xlabel, ylabel in panels:
         ax.set_title(title)
-        ax.set_xlabel("step")
+        ax.set_xlabel(xlabel)
         ax.set_ylabel(ylabel)
-    for ax in (ax_loss, ax_ppl, ax_tps, ax_mem):
         ax.grid(alpha=0.3)
         if ax.has_data():
             ax.legend(loc="best", fontsize=9)

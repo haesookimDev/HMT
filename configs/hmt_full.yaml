@@ -1,0 +1,75 @@
+# Stage 7.1: full HMT configuration — every memory policy in one YAML.
+# Same `train_baseline.py` code path as the baselines; selection is purely
+# config-driven.
+#
+# Toggle features by editing the relevant sub-blocks:
+#   training.optimizer       : adamw | lowrank_adamw | apollo_adamw
+#   training.lowrank.*       : low-rank gradient projection (Stages 1-2)
+#   activation_policy.*      : INT8 activation compression (Stage 3)
+#   checkpoint.*             : NVMe checkpoint-only policy (Stage 7.2)
+#
+# Comment out a block to disable that feature.
+
+baseline: adamw   # full-precision BF16 model loader
+
+# Top-level seed used by hmt.utils.seed_everything (Cross-cutting C.2).
+seed: 42
+
+model:
+  name: EleutherAI/pythia-160m
+  dtype: bfloat16
+  gradient_checkpointing: false
+
+data:
+  dataset: wikitext
+  subset: wikitext-2-raw-v1
+  split: train
+  text_field: text
+  seq_length: 1024
+  streaming: true
+  shuffle_buffer: 1000
+  seed: 42
+
+training:
+  optimizer: lowrank_adamw
+  learning_rate: 2.0e-5
+  weight_decay: 0.01
+  betas: [0.9, 0.95]
+  eps: 1.0e-8
+  max_grad_norm: 1.0
+  batch_size: 1
+  gradient_accumulation_steps: 8
+  max_steps: 200
+  warmup_steps: 20
+  lr_schedule: cosine
+
+  # Stages 1+2: low-rank gradient projection with energy-based per-layer rank.
+  lowrank:
+    mode: two_sided                # two_sided | left | right
+    method: randomized             # full | randomized (Stage 2.1)
+    basis_update_interval: 50      # K — refresh SVD every K optim steps
+    rank_scheduler:                # comment out + use `rank: 64` for fixed rank
+      candidates: [32, 64, 128, 256]
+      threshold: 0.95
+    target_pattern: "attention\\.(query_key_value|dense)|mlp\\.(dense_h_to_4h|dense_4h_to_h)"
+
+# Stage 3: hybrid activation compression. Comment block to disable.
+activation_policy:
+  block_size: 256
+  default: keep
+  rules:
+    - pattern: "mlp\\.dense_h_to_4h"
+      action: compress_int8
+    - pattern: "mlp\\.dense_4h_to_h"
+      action: compress_int8
+    - pattern: "attention\\.dense"
+      action: compress_int8
+
+eval:
+  split: validation
+  interval: 50
+  max_batches: 50
+
+logging:
+  log_interval: 10
+  output_dir: ./outputs/hmt_full
