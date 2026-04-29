@@ -2,6 +2,8 @@
 
 > 본 문서는 [README.md](README.md)의 12단계 개발 로드맵을 실행 가능한 단위 작업으로 분해한 것이다.
 > 각 항목은 **what / verify** 형식이며, verify 조건이 만족되어야 다음으로 넘어간다 (CLAUDE.md "Goal-Driven Execution").
+>
+> 원격 CUDA 환경에서만 진행 가능한 항목 + Stage 0–7에서 발견된 follow-up은 [BACKLOG.md](BACKLOG.md) 참조.
 
 ## 환경 / 도구
 
