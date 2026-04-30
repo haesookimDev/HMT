@@ -1,0 +1,163 @@
+{
+  "runs": [
+    {
+      "config": "configs\\baseline_adamw.yaml",
+      "output_dir": "outputs\\baseline_adamw",
+      "exit_code": 0,
+      "last_train": {
+        "event": "train",
+        "step": 1000,
+        "loss": 3.9088514745235443,
+        "lr": 5.1382736093730237e-11,
+        "step_time_s": 0.45467529993038625,
+        "tokens_per_s": 16980.90622676882,
+        "cur_mem_mb": 1098.5869140625,
+        "peak_mem_mb": 2247.13916015625
+      },
+      "last_eval": {
+        "event": "eval",
+        "step": 1000,
+        "eval_loss": 3.721809244155884,
+        "eval_ppl": 41.3391190499461,
+        "eval_tokens": 51150,
+        "eval_batches": 50
+      },
+      "ranks": null
+    },
+    {
+      "config": "configs\\hmt_stage1.yaml",
+      "output_dir": "outputs\\hmt_stage1",
+      "exit_code": 0,
+      "last_train": {
+        "event": "train",
+        "step": 1000,
+        "loss": 4.288007736206055,
+        "lr": 5.1382736093730237e-11,
+        "step_time_s": 0.47367689991369843,
+        "tokens_per_s": 13952.397010378434,
+        "cur_mem_mb": 1078.4248046875,
+        "peak_mem_mb": 2228.35205078125
+      },
+      "last_eval": {
+        "event": "eval",
+        "step": 1000,
+        "eval_loss": 4.120371074676513,
+        "eval_ppl": 61.58208957910598,
+        "eval_tokens": 51150,
+        "eval_batches": 50
+      },
+      "ranks": {
+        "avg": 64.0,
+        "min": 64,
+        "max": 64,
+        "n_layers": 48
+      }
+    },
+    {
+      "config": "configs\\hmt_stage2.yaml",
+      "output_dir": "outputs\\hmt_stage2",
+      "exit_code": 0,
+      "last_train": {
+        "event": "train",
+        "step": 1000,
+        "loss": 4.302056908607483,
+        "lr": 5.1382736093730237e-11,
+        "step_time_s": 0.5013466000091285,
+        "tokens_per_s": 15711.815958609643,
+        "cur_mem_mb": 1103.2607421875,
+        "peak_mem_mb": 2253.00048828125
+      },
+      "last_eval": {
+        "event": "eval",
+        "step": 1000,
+        "eval_loss": 4.139435834884644,
+        "eval_ppl": 62.76740028082736,
+        "eval_tokens": 51150,
+        "eval_batches": 50
+      },
+      "ranks": {
+        "avg": 124.66666666666667,
+        "min": 32,
+        "max": 256,
+        "n_layers": 48
+      }
+    },
+    {
+      "config": "configs\\hmt_stage6_apollo_tensor.yaml",
+      "output_dir": "outputs\\hmt_stage6_apollo_tensor",
+      "exit_code": 0,
+      "last_train": {
+        "event": "train",
+        "step": 1000,
+        "loss": 4.350115716457367,
+        "lr": 5.1382736093730237e-11,
+        "step_time_s": 0.4724028999917209,
+        "tokens_per_s": 17153.828198135565,
+        "cur_mem_mb": 1092.0341796875,
+        "peak_mem_mb": 2242.27392578125
+      },
+      "last_eval": {
+        "event": "eval",
+        "step": 1000,
+        "eval_loss": 4.072240290641784,
+        "eval_ppl": 58.68829426282658,
+        "eval_tokens": 51150,
+        "eval_batches": 50
+      },
+      "ranks": null
+    },
+    {
+      "config": "configs\\hmt_stage6_apollo_channel.yaml",
+      "output_dir": "outputs\\hmt_stage6_apollo_channel",
+      "exit_code": 0,
+      "last_train": {
+        "event": "train",
+        "step": 1000,
+        "loss": 4.230698883533478,
+        "lr": 5.1382736093730237e-11,
+        "step_time_s": 0.48296989989466965,
+        "tokens_per_s": 17510.25984280847,
+        "cur_mem_mb": 1093.125,
+        "peak_mem_mb": 2243.36474609375
+      },
+      "last_eval": {
+        "event": "eval",
+        "step": 1000,
+        "eval_loss": 4.003505082130432,
+        "eval_ppl": 54.789856810911196,
+        "eval_tokens": 51150,
+        "eval_batches": 50
+      },
+      "ranks": null
+    },
+    {
+      "config": "configs\\hmt_full.yaml",
+      "output_dir": "outputs\\hmt_full",
+      "exit_code": 0,
+      "last_train": {
+        "event": "train",
+        "step": 1000,
+        "loss": 4.32549649477005,
+        "lr": 5.1382736093730237e-11,
+        "step_time_s": 0.6785125000169501,
+        "tokens_per_s": 13695.109717655405,
+        "cur_mem_mb": 1104.9716796875,
+        "peak_mem_mb": 2218.82080078125
+      },
+      "last_eval": {
+        "event": "eval",
+        "step": 1000,
+        "eval_loss": 4.132594375610352,
+        "eval_ppl": 62.33944525571243,
+        "eval_tokens": 51150,
+        "eval_batches": 50
+      },
+      "ranks": {
+        "avg": 130.66666666666666,
+        "min": 32,
+        "max": 256,
+        "n_layers": 48
+      }
+    }
+  ]
+}

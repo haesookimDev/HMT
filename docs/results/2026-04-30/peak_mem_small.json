@@ -1,0 +1,53 @@
+{
+  "device": "cuda",
+  "device_name": "NVIDIA GeForce RTX 4070 Laptop GPU",
+  "dtype": "bfloat16",
+  "hidden": 1024,
+  "depth": 24,
+  "batch": 2,
+  "seq": 1024,
+  "rank": 64,
+  "block_size": 256,
+  "stage_1_6": [
+    {
+      "label": "adamw_dense",
+      "peak_mb": 320.251953125,
+      "state_elems": 50331672,
+      "note": "hidden=1024 depth=24 dtype=torch.bfloat16"
+    },
+    {
+      "label": "lowrank_two_sided_r64",
+      "peak_mb": 272.251953125,
+      "state_elems": 196608,
+      "note": "hidden=1024 depth=24 rank=64"
+    }
+  ],
+  "stage_3_5_with_relu": [
+    {
+      "label": "dense_linear",
+      "peak_mb": 188.2509765625,
+      "state_elems": 0,
+      "note": "hidden=1024 depth=24 batch=2 seq=1024 dtype=torch.bfloat16"
+    },
+    {
+      "label": "compressed_int8_linear",
+      "peak_mb": 334.64111328125,
+      "state_elems": 0,
+      "note": "hidden=1024 depth=24 batch=2 seq=1024 block=256"
+    }
+  ],
+  "stage_3_5_pure_linear": [
+    {
+      "label": "dense_linear",
+      "peak_mb": 184.2509765625,
+      "state_elems": 0,
+      "note": "hidden=1024 depth=24 batch=2 seq=1024 dtype=torch.bfloat16"
+    },
+    {
+      "label": "compressed_int8_linear",
+      "peak_mb": 246.64111328125,
+      "state_elems": 0,
+      "note": "hidden=1024 depth=24 batch=2 seq=1024 block=256"
+    }
+  ]
+}

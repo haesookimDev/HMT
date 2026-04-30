@@ -4,6 +4,7 @@
 > 각 항목은 **what / verify** 형식이며, verify 조건이 만족되어야 다음으로 넘어간다 (CLAUDE.md "Goal-Driven Execution").
 >
 > 원격 CUDA 환경에서만 진행 가능한 항목 + Stage 0–7에서 발견된 follow-up은 [BACKLOG.md](BACKLOG.md) 참조.
+> 측정 보고서 (peak VRAM / K-sweep / ablation 매트릭스)는 [docs/results/](docs/results/) 참조.
 
 ## 환경 / 도구
 
@@ -36,7 +37,8 @@
 
 ### 1k-step ablation 결과 (RTX 4070, pythia-160m, wikitext-2, 2026-04-30)
 
-`outputs/ablation_1k.json` + `outputs/ablation_1k_compare.png`. seed=42, lr=2e-5, bs=1×8, seq=1024.
+상세 보고서: [docs/results/2026-04-30/README.md](docs/results/2026-04-30/README.md)
+산출물: `outputs/ablation_1k.json` + `outputs/ablation_1k_compare.png` (gitignored, `docs/results/2026-04-30/`에 사본 보관). seed=42, lr=2e-5, bs=1×8, seq=1024.
 
 | Config | train loss@1k | **eval ppl** | peak VRAM | optim state | 비고 |
 |---|---|---|---|---|---|
@@ -109,7 +111,7 @@
 - [x] **1.6 회귀 테스트 `tests/test_{projector,lowrank_optim}.py`**
   - what: state-크기 감소 검증 (proxy for peak mem), tiny MLP end-to-end, dense path equivalence
   - verify: 21 tests / 1.37s (< 30s 목표) ✅. two_sided rank=64 on 768×768 → **state 144× 감소** (1.18M → 8.2K elements).
-  - **peak GPU mem 측정 (RTX 4070, 2026-04-30)** via `scripts/measure_peak_mem.py`:
+  - **peak GPU mem 측정 (RTX 4070, 2026-04-30)** via `scripts/measure_peak_mem.py` — 보고서 [docs/results/2026-04-30/README.md §1](docs/results/2026-04-30/README.md):
     - hidden=1024, depth=24, batch=2, seq=1024, bf16 → state-elems **256× 감소** (50.3M → 196K), peak VRAM **1.18× 감소** (320 → 272 MB).
     - peak gap (1.18× vs state 256×)는 LowRankAdamW가 매 step마다 `projector.reconstruct(low_update)`로 full-shape 임시 텐서를 할당하기 때문. Stage 5의 fused Triton kernel(in-place `W -= η · P U Q.T`)로 닫힐 격차 → BACKLOG F.7로 등록.
 
@@ -150,7 +152,7 @@
 
 - [x] **3.5 `configs/hmt_stage3.yaml`** — Stage 2 + activation_policy. README §3.4 hybrid 정책 (MLP intermediate + attention output INT8, 나머지 keep)
   - verify: smoke 36 Linear patch + 48 Linear low-rank 합성, step 8 loss 4.465→4.505 (+0.9%, int8 noise 한도), eval ppl 79.97→80.01 ✅
-  - **peak VRAM 측정 (RTX 4070, 2026-04-30)** via `scripts/measure_peak_mem.py`:
+  - **peak VRAM 측정 (RTX 4070, 2026-04-30)** via `scripts/measure_peak_mem.py` — 보고서 [docs/results/2026-04-30/README.md §1](docs/results/2026-04-30/README.md):
     - hidden=1024, depth=24, batch=2, seq=1024, bf16, with ReLU → CompressedLinear peak **1.78× 증가** (188 → 335 MB).
     - 순수 Linear stack (no ReLU) → CompressedLinear peak **1.34× 증가** (184 → 247 MB).
     - **반전 원인**: (a) `compress_blockwise_int8`이 `x.float()` + `(x_f / scale)` 등 full-size fp32 transient를 만들어 ~4× BF16 메모리를 일시 차지. (b) ReLU가 자기 입력을 BF16로 별도 저장하므로 같은 활성화가 INT8(CompressedLinear) + BF16(ReLU) 이중 저장됨. (c) `decompress`도 fp32 → BF16 캐스팅 chain으로 transient 추가.

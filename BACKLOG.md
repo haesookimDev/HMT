@@ -5,6 +5,7 @@
 > 전제 환경은 **원격 Linux + CUDA GPU**이며, 일부 항목은 long-run 학습이 필요하다.
 >
 > 진행 상황은 [TODO.md](TODO.md) 참조. 본 BACKLOG는 "deferred" 항목에 집중.
+> 측정 보고서: [docs/results/](docs/results/) — 2026-04-30 RTX 4070 측정 (peak VRAM, K-sweep, 1k ablation).
 
 ## 환경 전제
 
@@ -160,7 +161,13 @@
 ## Stage 6.3 — GaLore vs APOLLO long-run ablation
 
 코드는 모두 준비됨 (`configs/hmt_stage1.yaml`, `hmt_stage2.yaml`,
-`hmt_stage6_apollo.yaml`). 실제 long-run 비교만 deferred.
+`hmt_stage6_apollo_tensor.yaml`, `hmt_stage6_apollo_channel.yaml`).
+1k-step short-run은 RTX 4070에서 완료 — 보고서 [docs/results/2026-04-30/README.md §3](docs/results/2026-04-30/README.md).
+**1k 결과**: AdamW 41.3 ppl / APOLLO-channel 54.8 / APOLLO-tensor 58.7 / GaLore-fixed 61.6 / hmt_full 62.3 / GaLore-sched 62.8.
+- 메모리 절감 기법은 1k step에서 정확도 회복 못 함 (예상). 10k+ long-run 필요.
+- APOLLO-channel이 1k에서 GaLore 대비 의외로 강함 — pareto 우위 확인됨.
+
+10k-step long-run + 1B+ 모델 비교는 여전히 deferred:
 
 - [ ] **실험 매트릭스 정의**
   - 모델: pythia-160m → 1B → 3B (단계적)

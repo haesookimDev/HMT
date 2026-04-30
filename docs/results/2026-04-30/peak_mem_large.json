@@ -1,0 +1,39 @@
+{
+  "device": "cuda",
+  "device_name": "NVIDIA GeForce RTX 4070 Laptop GPU",
+  "dtype": "bfloat16",
+  "hidden": 1536,
+  "depth": 24,
+  "batch": 2,
+  "seq": 2048,
+  "rank": 64,
+  "block_size": 256,
+  "stage_1_6": [
+    {
+      "label": "adamw_dense",
+      "peak_mb": 784.251953125,
+      "state_elems": 113246232,
+      "note": "hidden=1536 depth=24 dtype=torch.bfloat16"
+    },
+    {
+      "label": "lowrank_two_sided_r64",
+      "peak_mb": 676.251953125,
+      "state_elems": 196608,
+      "note": "hidden=1536 depth=24 rank=64"
+    }
+  ],
+  "stage_3_5": [
+    {
+      "label": "dense_linear",
+      "peak_mb": 496.2509765625,
+      "state_elems": 0,
+      "note": "hidden=1536 depth=24 batch=2 seq=2048 dtype=torch.bfloat16"
+    },
+    {
+      "label": "compressed_int8_linear",
+      "peak_mb": 863.42236328125,
+      "state_elems": 0,
+      "note": "hidden=1536 depth=24 batch=2 seq=2048 block=256"
+    }
+  ]
+}
