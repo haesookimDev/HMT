@@ -43,6 +43,19 @@ dev = [
 [tool.setuptools.packages.find]
 include = ["hmt*"]
 
+# Pin torch to PyTorch's CUDA 12.4 index on Linux/Windows so `uv run`/`uv sync`
+# does not silently downgrade to the CPU-only wheel on PyPI. macOS has no CUDA,
+# so it falls back to the default index (CPU build, used for local dev).
+[tool.uv.sources]
+torch = [
+    { index = "pytorch-cu124", marker = "sys_platform != 'darwin'" },
+]
+
+[[tool.uv.index]]
+name = "pytorch-cu124"
+url = "https://download.pytorch.org/whl/cu124"
+explicit = true
+
 [tool.ruff]
 line-length = 100
 target-version = "py310"

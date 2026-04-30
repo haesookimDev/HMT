@@ -18,7 +18,7 @@
 - `[x]` 완료 (verify 조건 통과)
 - `[!]` 블로커 / 디펜던시 대기
 
-## 현재 상태 (2026-04-29)
+## 현재 상태 (2026-04-30)
 
 - Stage 0: 0.1 ~ 0.4 verify 통과. 0.5 CUDA-블록.
 - Stage 1: 1.1 ~ 1.6 verify 통과. step 8 loss baseline 4.366 vs HMT 4.520 (3.5%).
@@ -85,7 +85,10 @@
 
 - [x] **1.6 회귀 테스트 `tests/test_{projector,lowrank_optim}.py`**
   - what: state-크기 감소 검증 (proxy for peak mem), tiny MLP end-to-end, dense path equivalence
-  - verify: 21 tests / 1.37s (< 30s 목표) ✅. two_sided rank=64 on 768×768 → **state 144× 감소** (1.18M → 8.2K elements). peak GPU mem 측정은 CUDA 필요로 deferred.
+  - verify: 21 tests / 1.37s (< 30s 목표) ✅. two_sided rank=64 on 768×768 → **state 144× 감소** (1.18M → 8.2K elements).
+  - **peak GPU mem 측정 (RTX 4070, 2026-04-30)** via `scripts/measure_peak_mem.py`:
+    - hidden=1024, depth=24, batch=2, seq=1024, bf16 → state-elems **256× 감소** (50.3M → 196K), peak VRAM **1.18× 감소** (320 → 272 MB).
+    - peak gap (1.18× vs state 256×)는 LowRankAdamW가 매 step마다 `projector.reconstruct(low_update)`로 full-shape 임시 텐서를 할당하기 때문. Stage 5의 fused Triton kernel(in-place `W -= η · P U Q.T`)로 닫힐 격차 → BACKLOG F.7로 등록.
 
 ---
 
@@ -123,7 +126,12 @@
   - verify: 정책 매칭 모듈만 교체, forward 출력 패칭 전후 정확 일치, end-to-end 1-step SGD 후 파라미터 Frob rel < 2% ✅
 
 - [x] **3.5 `configs/hmt_stage3.yaml`** — Stage 2 + activation_policy. README §3.4 hybrid 정책 (MLP intermediate + attention output INT8, 나머지 keep)
-  - verify: smoke 36 Linear patch + 48 Linear low-rank 합성, step 8 loss 4.465→4.505 (+0.9%, int8 noise 한도), eval ppl 79.97→80.01 ✅. peak VRAM 측정은 CUDA 필요로 deferred
+  - verify: smoke 36 Linear patch + 48 Linear low-rank 합성, step 8 loss 4.465→4.505 (+0.9%, int8 noise 한도), eval ppl 79.97→80.01 ✅
+  - **peak VRAM 측정 (RTX 4070, 2026-04-30)** via `scripts/measure_peak_mem.py`:
+    - hidden=1024, depth=24, batch=2, seq=1024, bf16, with ReLU → CompressedLinear peak **1.78× 증가** (188 → 335 MB).
+    - 순수 Linear stack (no ReLU) → CompressedLinear peak **1.34× 증가** (184 → 247 MB).
+    - **반전 원인**: (a) `compress_blockwise_int8`이 `x.float()` + `(x_f / scale)` 등 full-size fp32 transient를 만들어 ~4× BF16 메모리를 일시 차지. (b) ReLU가 자기 입력을 BF16로 별도 저장하므로 같은 활성화가 INT8(CompressedLinear) + BF16(ReLU) 이중 저장됨. (c) `decompress`도 fp32 → BF16 캐스팅 chain으로 transient 추가.
+    - **결론**: 현재 eager-PyTorch 구현은 **저장된 활성화는 줄지만 (~50%) compress/decompress 임시 메모리가 그 절감을 상쇄**. Stage 5 Triton fused quantize/dequantize로만 진정한 peak 절감 가능 → BACKLOG F.7로 등록.
 
 ---
 

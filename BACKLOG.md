@@ -272,6 +272,21 @@
 - **해결 방향**: sparse grad는 lowrank 적용 안 하고 dense AdamW path로 fallback
 - **verify**: embedding이 sparse=True인 모델에서 lowrank_adamw 정상 동작
 
+### F.7 Eager 구현의 transient 메모리 (Stage 1.6 / 3.5 peak VRAM 측정으로 발견)
+
+- **발견**: 2026-04-30 RTX 4070 측정 (`scripts/measure_peak_mem.py`)
+  - LowRankAdamW state-elems **256× 감소**인데 peak VRAM은 **1.18× 만 감소**
+  - CompressedLinear가 dense Linear 대비 peak VRAM **1.34× 증가** (no-ReLU), **1.78× 증가** (with ReLU)
+- **원인**:
+  - **Stage 1.6**: `_step_lowrank`이 매 step `projector.reconstruct(low_update)`로 full-shape 텐서 할당 → state 절감을 transient가 잡아먹음
+  - **Stage 3.5**: `compress_blockwise_int8`이 `x.float()`, `(x_f / scale)` 등 4× BF16 크기의 fp32 transient 생성. `decompress_blockwise_int8`도 동일. ReLU가 같은 활성화를 BF16으로 별도 저장하면서 이중 저장 발생
+- **해결 방향 (Stage 5 Triton kernel과 동시 작업)**:
+  - 1.6: fused `W -= η · P @ U @ Q.T` 단일 kernel — reconstruction 임시 제거
+  - 3.5 forward: in-register fused quantize kernel — fp32 transient 없이 INT8 직접 산출
+  - 3.5 backward: fused dequant + matmul kernel — fp32 중간 텐서 제거
+  - ReLU 이중 저장: ReLU 직전 Linear에만 compress 적용 시 효과 없음 → activation checkpointing이나 ReLU도 압축 대상 확장 필요
+- **verify**: Stage 5 완료 후 동일 config 재측정. peak VRAM 비율이 state-elems 비율과 가까워져야 함 (≥0.5× state 절감 비율 반영)
+
 ### F.6 multi-GPU (FSDP / DDP) 호환성 미검증
 
 - **현재**: 단일 GPU 가정. `torch.cuda.set_rng_state_all`은 여러 device 다루지만, FSDP wrapper와는 미테스트
