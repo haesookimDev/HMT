@@ -1,9 +1,10 @@
-"""Tests for hmt.optim.lowrank_adamw — Stage 1.3."""
+"""Tests for hmt.optim.lowrank_adamw — Stage 1.3 + F.1 realign_state."""
 from __future__ import annotations
 
 import torch
 
 from hmt.optim import LowRankAdamW, make_projector_from_grad
+from hmt.optim.setup import refresh_projectors_from_grads
 
 
 def _toy_regression(seed: int, out_dim: int = 16, in_dim: int = 24, n: int = 128):
@@ -219,6 +220,180 @@ def test_dummy_mlp_lowrank_makes_progress():
         m.zero_grad(); loss.backward(); o.step()
 
     assert loss.item() < initial * 0.6, f"no progress: {initial:.4f} -> {loss.item():.4f}"
+
+
+def test_realign_state_identity_basis_change_is_noop():
+    """When P_new = P_old and Q_new = Q_old, realign_state must leave m, v
+    bit-identical (the rotation is identity)."""
+    torch.manual_seed(0)
+    out_dim, in_dim, rank = 12, 16, 4
+    w = torch.nn.Parameter(torch.randn(out_dim, in_dim))
+    w.grad = torch.randn(out_dim, in_dim)
+
+    o = LowRankAdamW([w], lr=1e-3)
+    proj = make_projector_from_grad(w.grad, mode="two_sided", rank=rank)
+    o.attach_projector(w, proj)
+    o.step()
+
+    m_before = o.state[w]["exp_avg"].clone()
+    v_before = o.state[w]["exp_avg_sq"].clone()
+
+    P_old, Q_old = proj.P.clone(), proj.Q.clone()
+    o.realign_state(w, P_old, Q_old, proj.P, proj.Q, proj.mode)
+
+    assert torch.allclose(o.state[w]["exp_avg"], m_before, atol=1e-5)
+    assert torch.allclose(o.state[w]["exp_avg_sq"], v_before, atol=1e-5)
+
+
+def test_realign_state_under_known_orthonormal_rotation():
+    """If we choose new bases as a rotation of the old, m must transform as
+    L @ m @ R where L = P_new.T @ P_old, R = Q_old.T @ Q_new."""
+    torch.manual_seed(1)
+    out_dim, in_dim, rank = 8, 8, 4
+    w = torch.nn.Parameter(torch.randn(out_dim, in_dim))
+    w.grad = torch.randn(out_dim, in_dim)
+
+    o = LowRankAdamW([w], lr=1e-3)
+    proj_old = make_projector_from_grad(w.grad, mode="two_sided", rank=rank)
+    o.attach_projector(w, proj_old)
+    o.step()
+    m_old = o.state[w]["exp_avg"].clone()
+
+    # Build a different orthonormal basis with the same shape as P_old, Q_old.
+    P_new, _ = torch.linalg.qr(torch.randn(out_dim, rank))
+    Q_new, _ = torch.linalg.qr(torch.randn(in_dim, rank))
+
+    expected_m = (P_new.T @ proj_old.P) @ m_old @ (proj_old.Q.T @ Q_new)
+    o.realign_state(w, proj_old.P, proj_old.Q, P_new, Q_new, "two_sided")
+    assert torch.allclose(o.state[w]["exp_avg"], expected_m, atol=1e-5)
+
+
+def test_refresh_with_align_does_not_diverge():
+    """Frequent refresh (K=4) with alignment must keep training stable —
+    no NaN, no explosion, and substantial loss reduction. Quantitative
+    K-sweep showing alignment beats no-alignment lives in
+    ``scripts/k_sweep.py`` since the effect is small at toy scales and
+    requires longer runs to be unambiguous."""
+    torch.manual_seed(0)
+    in_dim, out_dim, rank = 24, 16, 8
+    g = torch.Generator().manual_seed(0)
+    X = torch.randn(64, in_dim, generator=g)
+    W_true = torch.randn(out_dim, in_dim, generator=g) * 0.5
+    Y = X @ W_true.T + 0.05 * torch.randn(64, out_dim, generator=g)
+
+    torch.manual_seed(1)
+    m = torch.nn.Linear(in_dim, out_dim, bias=False)
+    o = LowRankAdamW(m.parameters(), lr=5e-3)
+
+    loss0 = ((m(X) - Y) ** 2).mean()
+    m.zero_grad(); loss0.backward()
+    proj = make_projector_from_grad(m.weight.grad, mode="two_sided", rank=rank)
+    o.attach_projector(m.weight, proj)
+    o.step()
+
+    targets = [("w", m.weight)]
+    initial = loss0.item()
+    final = initial
+    for step in range(80):
+        loss = ((m(X) - Y) ** 2).mean()
+        m.zero_grad(); loss.backward()
+        if step > 0 and step % 4 == 0:
+            refresh_projectors_from_grads(o, targets, align_state=True)
+        o.step()
+        final = loss.item()
+        assert not torch.isnan(torch.tensor(final)), f"NaN at step {step}"
+        assert final < 10 * initial, f"explosion at step {step}: {final} >> {initial}"
+
+    assert final < initial * 0.85, f"no progress: {initial:.4f} -> {final:.4f}"
+
+
+def test_realign_state_left_mode():
+    """left mode: state shape [r, in_dim]; rotation is L @ m only."""
+    torch.manual_seed(2)
+    out_dim, in_dim, rank = 8, 12, 4
+    w = torch.nn.Parameter(torch.randn(out_dim, in_dim))
+    w.grad = torch.randn(out_dim, in_dim)
+    o = LowRankAdamW([w], lr=1e-3)
+    proj = make_projector_from_grad(w.grad, mode="left", rank=rank)
+    o.attach_projector(w, proj)
+    o.step()
+    m_old = o.state[w]["exp_avg"].clone()
+
+    P_new, _ = torch.linalg.qr(torch.randn(out_dim, rank))
+    expected = (P_new.T @ proj.P) @ m_old
+    o.realign_state(w, proj.P, None, P_new, None, "left")
+    assert torch.allclose(o.state[w]["exp_avg"], expected, atol=1e-5)
+
+
+def test_realign_state_no_op_before_first_step():
+    """Calling realign_state on a param whose state is uninitialized must
+    not raise and must not allocate state."""
+    w = torch.nn.Parameter(torch.randn(8, 12))
+    o = LowRankAdamW([w], lr=1e-3)
+    P_old = torch.eye(8, 4)
+    Q_old = torch.eye(12, 4)
+    P_new = torch.eye(8, 4)
+    Q_new = torch.eye(12, 4)
+    o.realign_state(w, P_old, Q_old, P_new, Q_new, "two_sided")
+    assert w not in o.state or "exp_avg" not in o.state.get(w, {})
+
+
+def test_sparse_grad_falls_back_to_dense_path():
+    """F.5: HF Embedding(sparse=True) produces a sparse COO gradient. The
+    optimizer must accept it (densify) and update the embedding correctly,
+    matching what dense AdamW would produce on the densified gradient."""
+    vocab, dim = 64, 32
+
+    def _make_emb_with_sparse_grad(seed: int):
+        g = torch.Generator().manual_seed(seed)
+        emb = torch.nn.Embedding(vocab, dim, sparse=True)
+        with torch.no_grad():
+            emb.weight.copy_(torch.randn(vocab, dim, generator=g))
+        idx = torch.tensor([3, 7, 7, 31])
+        out = emb(idx).sum()
+        out.backward()
+        assert emb.weight.grad is not None and emb.weight.grad.is_sparse
+        return emb
+
+    # Reference: torch.optim.AdamW on the densified gradient.
+    emb_ref = _make_emb_with_sparse_grad(seed=42)
+    dense_grad = emb_ref.weight.grad.to_dense().clone()
+    emb_ref.weight.grad = dense_grad
+    o_ref = torch.optim.AdamW(emb_ref.parameters(), lr=1e-2,
+                              betas=(0.9, 0.95), weight_decay=0.0)
+    o_ref.step()
+
+    # Ours: LowRankAdamW on the original sparse gradient.
+    emb_ours = _make_emb_with_sparse_grad(seed=42)
+    o_ours = LowRankAdamW(emb_ours.parameters(), lr=1e-2,
+                          betas=(0.9, 0.95), weight_decay=0.0)
+    o_ours.step()
+
+    assert torch.allclose(emb_ref.weight, emb_ours.weight, atol=1e-5)
+
+
+def test_sparse_grad_drops_projector_for_that_param():
+    """If a projector was attached and then a sparse grad arrives, the
+    optimizer must use the dense path (projector ignored) and not crash."""
+    vocab, dim = 32, 16
+    torch.manual_seed(0)
+    emb = torch.nn.Embedding(vocab, dim, sparse=True)
+    out = emb(torch.tensor([1, 2, 3])).sum()
+    out.backward()
+    sparse_grad = emb.weight.grad
+    assert sparse_grad.is_sparse
+
+    # Attach a projector built from a fake DENSE grad (so attach succeeds),
+    # then call step() — the sparse grad on .grad must trigger fallback.
+    fake_dense = torch.randn(vocab, dim)
+    proj = make_projector_from_grad(fake_dense, mode="two_sided", rank=4)
+
+    o = LowRankAdamW([emb.weight], lr=1e-3)
+    o.attach_projector(emb.weight, proj)
+    o.step()  # Must not raise.
+
+    # State shape must be the dense shape (fallback path), not low-rank.
+    assert tuple(o.state[emb.weight]["exp_avg"].shape) == (vocab, dim)
 
 
 def test_attach_projector_resets_state_shape():

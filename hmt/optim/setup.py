@@ -77,14 +77,29 @@ def attach_projectors_from_grads(
 def refresh_projectors_from_grads(
     optim: LowRankAdamW,
     target_params: Iterable[tuple[str, torch.nn.Parameter]],
+    *,
+    align_state: bool = True,
 ) -> int:
     """Recompute SVD bases for already-attached projectors using current
-    gradients. Returns the number refreshed."""
+    gradients. Returns the number refreshed.
+
+    With ``align_state=True`` (default), ``m`` and ``v`` are rotated from the
+    pre-refresh (P, Q) basis into the new one so that EMA history is preserved
+    instead of becoming meaningless coordinates in a stale basis. This is the
+    BACKLOG F.1 fix; disable by setting ``align_state=False`` to reproduce the
+    old (pre-fix) behavior.
+    """
     n = 0
     for _name, p in target_params:
         proj = optim.projectors.get(id(p))
         if proj is None or p.grad is None:
             continue
-        proj.refresh_(p.grad)
+        if align_state:
+            P_old = proj.P.clone() if proj.P is not None else None
+            Q_old = proj.Q.clone() if proj.Q is not None else None
+            proj.refresh_(p.grad)
+            optim.realign_state(p, P_old, Q_old, proj.P, proj.Q, proj.mode)
+        else:
+            proj.refresh_(p.grad)
         n += 1
     return n

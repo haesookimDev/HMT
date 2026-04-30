@@ -33,7 +33,7 @@ from hmt.optim import (
     select_target_params,
 )
 from hmt.profiler import TrainingProfiler, format_step_stats, reset_peak_memory
-from hmt.utils import seed_everything
+from hmt.utils import build_logger, seed_everything
 
 
 def pick_device() -> torch.device:
@@ -215,7 +215,7 @@ def train(cfg: DictConfig) -> None:
     out_dir = Path(cfg.logging.output_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
     metrics_path = out_dir / "metrics.jsonl"
-    metrics_f = metrics_path.open("w", encoding="utf-8")
+    logger = build_logger(cfg.logging, out_dir)
 
     profiler = TrainingProfiler()
     reset_peak_memory()
@@ -300,17 +300,14 @@ def train(cfg: DictConfig) -> None:
         step += 1
         avg_loss = accum_loss / grad_accum
         stats = profiler.end_step(step=step, loss=avg_loss, tokens=accum_tokens)
-        metrics_f.write(json.dumps({
-            "event": "train",
-            "step": stats.step,
+        logger.log(stats.step, {
             "loss": stats.loss,
             "lr": base_lr * scale,
             "step_time_s": stats.step_time_s,
             "tokens_per_s": stats.tokens_per_s,
             "cur_mem_mb": stats.cur_mem_mb,
             "peak_mem_mb": stats.peak_mem_mb,
-        }) + "\n")
-        metrics_f.flush()
+        }, event="train")
 
         if step % log_interval == 0 or step == 1:
             print(format_step_stats(stats))
@@ -328,22 +325,19 @@ def train(cfg: DictConfig) -> None:
                 f"[eval ] step {step:>6d} | loss {er.loss:7.4f} | ppl {er.ppl:9.3f} | "
                 f"tokens {er.tokens} | batches {er.batches}"
             )
-            metrics_f.write(json.dumps({
-                "event": "eval",
-                "step": step,
+            logger.log(step, {
                 "eval_loss": er.loss,
                 "eval_ppl": er.ppl,
                 "eval_tokens": er.tokens,
                 "eval_batches": er.batches,
-            }) + "\n")
-            metrics_f.flush()
+            }, event="eval")
 
         accum_loss = 0.0
         accum_tokens = 0
         if step < max_steps:
             profiler.start_step()
 
-    metrics_f.close()
+    logger.close()
     print(f"[done] run peak GPU memory: {profiler.run_peak_mb():.1f} MB")
     print(f"[done] metrics written to {metrics_path}")
 

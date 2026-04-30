@@ -21,7 +21,7 @@ from typing import Iterable, Optional
 import torch
 from torch.optim import Optimizer
 
-from hmt.optim.projector import LayerProjector
+from hmt.optim.projector import LayerProjector, ProjectionMode
 
 
 class LowRankAdamW(Optimizer):
@@ -60,6 +60,52 @@ class LowRankAdamW(Optimizer):
             self.state[param].clear()
 
     @torch.no_grad()
+    def realign_state(
+        self,
+        param: torch.Tensor,
+        P_old: Optional[torch.Tensor],
+        Q_old: Optional[torch.Tensor],
+        P_new: Optional[torch.Tensor],
+        Q_new: Optional[torch.Tensor],
+        mode: ProjectionMode,
+    ) -> None:
+        """Rotate ``(m, v)`` from the (P_old, Q_old) low-rank basis into the
+        (P_new, Q_new) basis after a projector refresh. ``m`` rotates linearly
+        (basis-change of a vector); ``v`` is approximated by squaring the
+        rotation matrix element-wise — keeps signs non-negative and is exact
+        when the new basis equals the old one. Without this realignment a
+        small K (frequent refresh) leaves stale optimizer state that points
+        in directions no longer represented in the new basis."""
+        state = self.state.get(param)
+        if state is None or "exp_avg" not in state:
+            return  # state not initialized yet (no step taken)
+        m = state["exp_avg"]
+        v = state["exp_avg_sq"]
+        f32 = torch.float32
+
+        if mode == "two_sided":
+            if P_old is None or Q_old is None or P_new is None or Q_new is None:
+                return
+            L = (P_new.to(f32).T @ P_old.to(f32))   # [r_new, r_old]
+            R = (Q_old.to(f32).T @ Q_new.to(f32))   # [r_old, r_new]
+            state["exp_avg"] = (L @ m @ R).contiguous()
+            state["exp_avg_sq"] = ((L * L) @ v @ (R * R)).contiguous()
+        elif mode == "left":
+            if P_old is None or P_new is None:
+                return
+            L = (P_new.to(f32).T @ P_old.to(f32))
+            state["exp_avg"] = (L @ m).contiguous()
+            state["exp_avg_sq"] = ((L * L) @ v).contiguous()
+        elif mode == "right":
+            if Q_old is None or Q_new is None:
+                return
+            R = (Q_old.to(f32).T @ Q_new.to(f32))
+            state["exp_avg"] = (m @ R).contiguous()
+            state["exp_avg_sq"] = (v @ (R * R)).contiguous()
+        else:
+            raise ValueError(f"unknown projection mode: {mode}")
+
+    @torch.no_grad()
     def step(self, closure=None):
         loss = None
         if closure is not None:
@@ -74,12 +120,24 @@ class LowRankAdamW(Optimizer):
             for p in group["params"]:
                 if p.grad is None:
                     continue
-                if p.grad.is_sparse:
-                    raise RuntimeError("LowRankAdamW does not support sparse gradients")
 
                 projector = self._projectors.get(id(p))
+                # F.5: HF Embedding(sparse=True) yields a sparse COO grad.
+                # LowRankAdamW is an AdamW variant — it has no native sparse
+                # path (torch.optim.SparseAdam is the right tool for that),
+                # so we densify and force the dense AdamW branch. We also
+                # drop any projector for this param: SVD over a sparse grad
+                # would densify it anyway and the savings rationale (rank<<dim)
+                # doesn't fit embeddings.
+                if p.grad.is_sparse:
+                    grad = p.grad.to_dense()
+                    projector_for_step = None
+                else:
+                    grad = p.grad
+                    projector_for_step = projector
+
                 state = self.state[p]
-                self._ensure_state(state, p, projector)
+                self._ensure_state(state, p, projector_for_step)
                 state["step"] += 1
                 t = state["step"]
 
@@ -88,19 +146,19 @@ class LowRankAdamW(Optimizer):
                 if wd > 0.0:
                     p.data.mul_(1.0 - lr * wd)
 
-                if projector is None:
+                if projector_for_step is None:
                     update = self._adamw_update(
-                        state["exp_avg"], state["exp_avg_sq"], p.grad,
+                        state["exp_avg"], state["exp_avg_sq"], grad,
                         beta1, beta2, eps, t,
                     )
                     p.data.add_(update.to(p.dtype), alpha=-lr)
                 else:
-                    low_grad = projector.project(p.grad)
+                    low_grad = projector_for_step.project(grad)
                     low_update = self._adamw_update(
                         state["exp_avg"], state["exp_avg_sq"], low_grad,
                         beta1, beta2, eps, t,
                     )
-                    full_update = projector.reconstruct(low_update.to(p.dtype))
+                    full_update = projector_for_step.reconstruct(low_update.to(p.dtype))
                     p.data.add_(full_update, alpha=-lr)
 
         return loss

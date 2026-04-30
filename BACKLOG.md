@@ -229,14 +229,31 @@
 
 다음 항목들은 코드 path는 정확히 동작하나, 학습 품질을 더 끌어올리려면 추후 다룰 가치 있음.
 
-### F.1 LowRankAdamW basis 갱신 시 m / v 좌표계 미정렬
+### F.1 LowRankAdamW basis 갱신 시 m / v 좌표계 미정렬 — **부분 해결 (2026-04-30)**
 
 - **발견**: Stage 1.4 smoke. K=4 같은 짧은 refresh interval에서 PPL 진동.
 - **원인**: `LayerProjector.refresh_`로 P, Q를 갈아끼울 때 m, v는 옛 basis 좌표계에 머무름. 새 basis에서는 의미가 다름.
-- **해결 방향**:
-  - GaLore 논문의 m/v projection 보정 적용 (오래된 m을 새 basis로 transform)
-  - 또는 K를 충분히 크게 (≥50) 유지하여 영향 최소화 (현재 default)
-- **verify**: K=4 ~ 200 sweep, K 작아도 PPL 단조 감소 유지
+- **구현됨**:
+  - `LowRankAdamW.realign_state(param, P_old, Q_old, P_new, Q_new, mode)` 추가 — m은 `L @ m @ R` (정확), v는 `(L*L) @ v @ (R*R)` (element-wise squared 근사)
+  - `refresh_projectors_from_grads(..., align_state=True)` 기본 활성. False로 옛 동작 재현 가능
+  - 단위테스트 5개: identity-rotation noop, known-orthonormal-rotation, left mode, no-state-pre-step, K=4 안정성
+- **K-sweep 측정** (`scripts/k_sweep.py`, hidden=32, rank=8, 300 step, 3 seeds 평균):
+  | K | aligned | unaligned | delta (양수 = aligned 우위) |
+  |---|---|---|---|
+  | 2 | 4.347 | 4.423 | **+0.076** |
+  | 4 | 4.483 | 4.415 | -0.069 |
+  | 8 | 4.608 | 4.442 | -0.165 |
+  | 16 | 4.455 | 4.358 | -0.097 |
+  | 50 | 4.138 | 4.103 | -0.034 |
+  | 100 | 4.061 | 4.056 | -0.005 |
+  - **K=2**: aligned 명확히 우위 (history가 너무 짧아 reset 페널티 큼)
+  - **K=4~16**: reset이 약간 우위 (variance의 squared-rotation 근사가 충분히 정확하지 않은 듯)
+  - **K≥50**: 둘 다 비슷 (refresh가 드물어 어떤 방식이든 영향 작음)
+- **결론**: 토이 스케일에서 alignment의 효과는 mixed. m의 정확 회전은 이론적으로 옳고 K=2처럼 매우 짧은 interval에서 도움. v의 quadratic 근사는 중간 K에서 손해 가능.
+- **후속 검증 (deferred to long-run, 실제 모델)**:
+  1. pythia-160m 1k step real-data K=4/16/50/100 sweep — 토이와 다른 양상이 나오는지
+  2. v reset 변형 (`align m only, reset v`) 추가 후 비교
+  3. GaLore 논문의 정확한 v 처리 방식 확인 후 채택
 
 ### F.2 INT8 absmax round-trip error 한계
 
@@ -265,12 +282,13 @@
 - **해결 방향**: `patch_model_int8_linear`의 역연산 `unpatch_model_int8_linear` 추가
 - **verify**: patch → save_pretrained → load_pretrained 라운드트립 (CUDA 환경)
 
-### F.5 `LowRankAdamW`의 sparse 가정 미검증
+### F.5 `LowRankAdamW`의 sparse grad fallback — **해결 (2026-04-30)**
 
-- **현재**: `if p.grad.is_sparse: raise RuntimeError(...)` — 즉시 에러
-- **HF Embedding의 `sparse=True`** 사용 시 학습 진입 불가
-- **해결 방향**: sparse grad는 lowrank 적용 안 하고 dense AdamW path로 fallback
-- **verify**: embedding이 sparse=True인 모델에서 lowrank_adamw 정상 동작
+- **이전**: `if p.grad.is_sparse: raise RuntimeError(...)` — 즉시 에러
+- **수정**: `step()`에서 sparse grad를 만나면 `to_dense()`로 변환 후 dense AdamW 경로로 진행. 해당 param의 projector는 step 동안 무시 (sparse grad는 SVD 의미가 없고, 임베딩에 low-rank 근사를 적용할 이유도 없음)
+- **테스트**: `tests/test_lowrank_optim.py`
+  - `test_sparse_grad_falls_back_to_dense_path` — `nn.Embedding(sparse=True)`의 COO grad에 대해 LowRankAdamW의 결과가 dense AdamW(densified grad)와 정확히 일치 (atol 1e-5)
+  - `test_sparse_grad_drops_projector_for_that_param` — projector가 attached되어 있어도 sparse grad가 들어오면 fallback 경로 (state shape이 dense), crash 없음
 
 ### F.7 Eager 구현의 transient 메모리 (Stage 1.6 / 3.5 peak VRAM 측정으로 발견)
 

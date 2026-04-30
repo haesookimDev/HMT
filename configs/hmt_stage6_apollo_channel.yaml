@@ -1,0 +1,42 @@
+# Stage 6.3 ablation: APOLLO-AdamW with channel (per-row v) scaling.
+
+baseline: adamw
+
+model:
+  name: EleutherAI/pythia-160m
+  dtype: bfloat16
+  gradient_checkpointing: false
+
+data:
+  dataset: wikitext
+  subset: wikitext-2-raw-v1
+  split: train
+  text_field: text
+  seq_length: 1024
+  streaming: true
+  shuffle_buffer: 1000
+  seed: 42
+
+training:
+  optimizer: apollo_adamw
+  learning_rate: 2.0e-5
+  weight_decay: 0.01
+  betas: [0.9, 0.95]
+  eps: 1.0e-8
+  max_grad_norm: 1.0
+  batch_size: 1
+  gradient_accumulation_steps: 8
+  max_steps: 200
+  warmup_steps: 20
+  lr_schedule: cosine
+  apollo:
+    scaling: channel
+
+eval:
+  split: validation
+  interval: 50
+  max_batches: 50
+
+logging:
+  log_interval: 10
+  output_dir: ./outputs/hmt_stage6_apollo_channel

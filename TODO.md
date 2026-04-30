@@ -32,7 +32,7 @@
 - 횡단 (Cross-cutting):
   - C.1 `.github/workflows/ci.yml` — ruff + pytest on Ubuntu CPU runner ✅
   - C.2 `hmt/utils/seed.py` — `seed_everything` (Python random + numpy + torch CPU/CUDA/MPS) ✅
-- 누적 테스트: **74 passed / 2.19s**, ruff clean
+- 누적 테스트: **90 passed / 4.3s**, ruff clean (F.1 realign_state +5, F.5 sparse fallback +2, C.3 logger +9)
 - 다음 작업: macOS에서 가능한 핵심 path 완료. **Stage 4/5 (CPU cache, Triton) + 6.2/6.3 long-run 비교는 원격 CUDA**. 또는 README의 결과 그래프를 실제 long-run으로 채우기.
 
 ---
@@ -207,7 +207,10 @@
 
 - [x] **C.1 GitHub Actions** — `.github/workflows/ci.yml`. Ubuntu CPU + uv + ruff + pytest. 모델 다운로드 없는 합성/dummy 데이터로 70 tests 검증
 - [x] **C.2 결정성** — `hmt/utils/seed.py`의 `seed_everything(seed, deterministic=False)`. Python random + numpy + torch CPU/CUDA/MPS 시드. `train_baseline.py`에 통합. ruff clean
-- [ ] **C.3 로깅 추상화** — JSONL / TensorBoard / W&B 단일 인터페이스. (W&B 도입 시점에)
+- [x] **C.3 로깅 추상화** — `hmt/utils/logger.py` (`MetricLogger` Protocol + `JsonlLogger`/`TensorBoardLogger`/`WandBLogger`/`MultiLogger` + `build_logger`)
+  - `cfg.logging.backends` (string/list, default `["jsonl"]`) — 단일/다중 백엔드 dispatch
+  - `train_baseline.py` 통합: 직접 `metrics_f.write(json.dumps(...))` → `logger.log(step, metrics, event=...)`. JSONL 출력은 byte-for-byte 동일
+  - 단위테스트 9개 (write/dispatch/multi/non-scalar skip/unknown-backend error)
 - [ ] **C.4 원격 학습 가이드** — RunPod / Lambda Labs 절차 문서
 
 ---
