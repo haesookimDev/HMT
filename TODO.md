@@ -33,6 +33,29 @@
   - C.1 `.github/workflows/ci.yml` — ruff + pytest on Ubuntu CPU runner ✅
   - C.2 `hmt/utils/seed.py` — `seed_everything` (Python random + numpy + torch CPU/CUDA/MPS) ✅
 - 누적 테스트: **90 passed / 4.3s**, ruff clean (F.1 realign_state +5, F.5 sparse fallback +2, C.3 logger +9)
+
+### 1k-step ablation 결과 (RTX 4070, pythia-160m, wikitext-2, 2026-04-30)
+
+`outputs/ablation_1k.json` + `outputs/ablation_1k_compare.png`. seed=42, lr=2e-5, bs=1×8, seq=1024.
+
+| Config | train loss@1k | **eval ppl** | peak VRAM | optim state | 비고 |
+|---|---|---|---|---|---|
+| `baseline_adamw` | 3.91 | **41.34** | 2247 MB | full | AdamW dense — 짧은 run에서 정확도 baseline |
+| `hmt_stage6_apollo_channel` | 4.23 | **54.79** | 2243 MB | per-row v | AdamW 다음 우위 — PPL +33% |
+| `hmt_stage6_apollo_tensor` | 4.35 | 58.69 | 2242 MB | scalar v | channel보다 약간 손해 |
+| `hmt_stage1` (GaLore r=64) | 4.29 | 61.58 | 2228 MB | r×r low-rank | 256× state 감소, PPL +49% |
+| `hmt_full` (GaLore+sched+INT8) | 4.33 | 62.34 | 2219 MB | low-rank + INT8 act | 추가 INT8 비용은 ppl +1 정도 |
+| `hmt_stage2` (GaLore+sched) | 4.30 | 62.77 | 2253 MB | low-rank (avg r=125) | scheduler가 fixed보다 약간 더 안 좋음 (1k 짧아서?) |
+
+**관찰**:
+1. 1k step은 메모리 절감 기법이 정확도를 회복하기엔 짧음 — 10k+ pre-training step에서야 격차가 좁아질 가능성
+2. **APOLLO-channel이 의외로 강함** — AdamW 대비 +33% ppl, GaLore 대비 -10% — pareto 우위
+3. peak VRAM은 8GB GPU에서 162M 모델이라 거의 동일 (2.2 GB 부근) — Phase 2~3 (1B+) 모델에서야 진짜 차이가 보일 것
+4. INT8 활성화 압축(`hmt_full`)은 stage2 대비 PPL 손실 < 1 — accuracy cost 미미
+
+**후속 (BACKLOG에 등록)**:
+- 10k step long-run으로 정확도 격차 좁히기 (BACKLOG 6.3)
+- 1B+ 모델에서 peak VRAM 차이 측정 (Phase 2~3, 클라우드 GPU 필요)
 - 다음 작업: macOS에서 가능한 핵심 path 완료. **Stage 4/5 (CPU cache, Triton) + 6.2/6.3 long-run 비교는 원격 CUDA**. 또는 README의 결과 그래프를 실제 long-run으로 채우기.
 
 ---
